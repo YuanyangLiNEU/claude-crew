@@ -39,7 +39,7 @@ Create a group, add all 4 bots as members, and add yourself.
 ### 3. Configure
 
 ```bash
-git clone https://github.com/anthropics/claude-crew.git
+git clone https://github.com/YuanyangLiNEU/claude-crew.git
 cd claude-crew
 npm install
 
