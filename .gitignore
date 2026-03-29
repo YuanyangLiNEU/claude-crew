@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.pids/
+logs/
+agents/shared/inbox/
+agents/shared/group-history.jsonl
+.DS_Store

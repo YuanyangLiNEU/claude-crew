@@ -1,0 +1,22 @@
+{
+  "name": "claude-crew",
+  "version": "0.1.0",
+  "description": "Run a team of Claude Code agents on Telegram",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "start:all": "bash scripts/restart-all.sh",
+    "stop": "bash scripts/stop-all.sh",
+    "status": "bash scripts/status.sh"
+  },
+  "dependencies": {
+    "grammy": "^1.21.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

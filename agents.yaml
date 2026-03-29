@@ -1,0 +1,39 @@
+# Claude Crew — Agent Configuration
+# Each agent gets its own Telegram bot and Claude Code instance.
+
+# Project directory that all agents work on (their CLAUDE.md files live under agents/)
+project_dir: .
+
+# Allowed Telegram user IDs (comma-separated). Leave empty to allow all.
+# Find yours: message @userinfobot on Telegram
+allowed_users: ""
+
+agents:
+  - name: Devin
+    id: engineer
+    role: engineer
+    dir: ./agents/engineer
+    bot_token_env: ENGINEER_BOT_TOKEN
+    # Extra tools to block (on top of the global rm -rf block)
+    extra_disallowed: ""
+
+  - name: Lark
+    id: engineer2
+    role: engineer
+    dir: ./agents/engineer2
+    bot_token_env: ENGINEER2_BOT_TOKEN
+    extra_disallowed: ""
+
+  - name: Sage
+    id: pm
+    role: pm
+    dir: ./agents/pm
+    bot_token_env: PM_BOT_TOKEN
+    extra_disallowed: "Edit,Bash(npm install *)"
+
+  - name: Aria
+    id: ux
+    role: ux
+    dir: ./agents/ux
+    bot_token_env: UX_BOT_TOKEN
+    extra_disallowed: "Edit,Read,Glob,Grep,Bash(npm install *)"
