@@ -137,11 +137,81 @@ claude-crew/
 
 ## Adding a New Agent
 
-1. Create a bot via BotFather, add token to `.env`
-2. Create `agents/<role>/CLAUDE.md` with role definition
-3. Add entry to `agents.yaml`
-4. Update team roster in `agents/shared/team-base.md`
-5. Restart: `npm run start:all`
+Example: adding a QA engineer named "Ember".
+
+### 1. Create a Telegram bot
+
+Message [@BotFather](https://t.me/BotFather):
+```
+/newbot → "Ember" → ember_qa_bot
+```
+Go to **Bot Settings → Group Privacy → Turn off**, then add the bot to your group.
+
+### 2. Add the bot token
+
+Add to `.env`:
+```
+QA_BOT_TOKEN=<paste token from BotFather>
+```
+
+### 3. Create the role
+
+```bash
+mkdir -p agents/qa
+```
+
+Create `agents/qa/CLAUDE.md`:
+```markdown
+# Role: Ember — QA Engineer
+
+You are **Ember**, the QA Engineer. Always introduce yourself as "Ember".
+
+## Identity
+- **Name**: Ember
+- **ID**: `@qa`
+- **Role**: QA Engineer
+- **Reports to**: the project founder
+
+## Shared Profile
+Read `agents/shared/team-base.md` — team-wide info, communication, escalation.
+
+## What You Do
+1. **Test features end-to-end** — verify new changes work as expected
+2. **Find edge cases** — empty states, error states, boundary conditions
+3. **Report bugs clearly** — steps to reproduce, expected vs actual, severity
+...
+
+## Feedback from Founder
+(Append feedback here.)
+```
+
+### 4. Add to `agents.yaml`
+
+```yaml
+  - name: Ember
+    id: qa
+    role: qa
+    dir: ./agents/qa
+    bot_token_env: QA_BOT_TOKEN
+    extra_disallowed: ""
+```
+
+### 5. Update the team roster
+
+Add Ember to `agents/shared/team-base.md`:
+```
+| **Ember** | QA Engineer | `@qa` |
+```
+
+Also update other agents' CLAUDE.md files if they should know when to tag Ember.
+
+### 6. Start
+
+```bash
+npm run start:all
+```
+
+The new agent is live. Message `@ember_qa_bot` in the group to test.
 
 ## Features
 
