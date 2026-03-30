@@ -2,6 +2,8 @@
 # Each agent gets its own Telegram bot and Claude Code instance.
 # Bot tokens and allowed users are configured in .env (not here).
 
+founder: ""  # Your name — agents will refer to you by this name
+
 agents:
   - name: Devin
     id: engineer_devin         # Unique ID, used for @mentions and routing

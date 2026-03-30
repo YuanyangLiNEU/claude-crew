@@ -30,7 +30,7 @@ Message [@BotFather](https://t.me/BotFather) on Telegram and create one bot per 
 /newbot → "Aria" → aria_ux_bot
 ```
 
-For each bot, go to **Bot Settings → Group Privacy → Turn off** so they can see group messages.
+For each bot, go to **Bot Settings → Group Privacy → Turn off**. This is required so bots can see all group messages (not just @mentions), which enables the smart routing layer.
 
 ### 2. Create a Telegram group
 
@@ -46,11 +46,14 @@ npm install
 cp .env.example .env
 # Paste your bot tokens in .env
 # Add your Telegram user ID to ALLOWED_USERS (message @userinfobot to find it)
+# Optionally set FOUNDER_NAME (your name)
 ```
 
 ### 4. Set up your project
 
-Optionally, create a `CLAUDE.md` in the root directory with your project context (architecture, key files, commands). All agents will auto-load it. Then customize `agents.yaml` and the role CLAUDE.md files for your project.
+- Optionally set `founder` in `agents.yaml` to your name
+- Optionally create a `CLAUDE.md` in the root directory with your project context (architecture, key files, commands) — all agents will auto-load it
+- Customize the role CLAUDE.md files in `agents/` for your project
 
 ### 5. Start
 
@@ -62,7 +65,7 @@ npm run stop          # Stop all agents
 
 ### 6. Chat
 
-In the Telegram group, @mention the bot you want to talk to. In DMs, each bot responds directly.
+In the Telegram group, @mention a bot directly, or just send a message — the smart router will decide who should respond. In DMs, each bot responds directly.
 
 ## How It Works
 
@@ -97,13 +100,15 @@ Devin's response mentions @ux_aria
 Define your team. Each agent needs a name, ID, directory, and bot token:
 
 ```yaml
+founder: ""  # Your name (optional, defaults to "Founder")
+
 agents:
   - name: Devin
     id: engineer_devin         # Unique ID (role + name), used for @mentions
     role: engineer             # Shared profile: agents/shared/engineer-base.md
     dir: ./agents/engineer_devin
     bot_token_env: ENGINEER_DEVIN_BOT_TOKEN
-    extra_disallowed: ""
+    extra_disallowed: ""       # Extra tools to block (on top of global rm -rf)
 ```
 
 ### Role CLAUDE.md files
@@ -172,7 +177,7 @@ You are **Ember**, the QA Engineer. Always introduce yourself as "Ember".
 
 ## Identity
 - **Name**: Ember
-- **ID**: `@qa`
+- **ID**: `@qa_ember`
 - **Role**: QA Engineer
 - **Reports to**: the project founder
 
@@ -204,7 +209,7 @@ Read `agents/shared/team-base.md` — team-wide info, communication, escalation.
 
 Add Ember to `agents/shared/team-base.md`:
 ```
-| **Ember** | QA Engineer | `@qa` |
+| **Ember** | QA Engineer | `@qa_ember` |
 ```
 
 Also update other agents' CLAUDE.md files if they should know when to tag Ember.
@@ -222,7 +227,7 @@ The new agent is live. Message `@ember_qa_bot` in the group to test.
 - **Smart routing** — conversation-aware layer reads recent chat and decides who should respond (1 Sonnet call, not 4)
 - **Group chat context** — all agents see the last 20 messages for context
 - **Cross-agent messaging** — agents @mention each other and messages route automatically
-- **Bot-to-bot handoff** — when one agent responds, the router evaluates if another should follow up
+- **Bot-to-bot handoff** — agents @mention each other in responses, messages route via inbox
 - **Markdown rendering** — responses auto-converted to Telegram HTML (bold, code, links, etc.)
 - **"Still working" notices** — sent after 2 min of processing
 - **Per-role permissions** — control what each agent can/can't do via `extra_disallowed` in agents.yaml
@@ -239,7 +244,7 @@ The new agent is live. Message `@ember_qa_bot` in the group to test.
 ## Known Limitations
 
 - Agents process messages sequentially (one at a time per agent) — complex tasks block the queue
-- Cross-agent messaging uses file-based polling (3s interval) — not instant
+- Cross-agent messaging uses file-based polling (1s interval) — not instant
 - `rm -rf` is the only hard-blocked command; other restrictions are policy-based (CLAUDE.md instructions)
 - Group chat history resets on file deletion (but session memory persists via `--continue`)
 

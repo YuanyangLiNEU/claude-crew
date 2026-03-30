@@ -42,14 +42,14 @@ const CONFIG_PATH = process.env.CONFIG_PATH || path.join(ROOT, "agents.yaml");
 
 let agentMentions: Record<string, string[]> = {};
 let agentDescriptions = "";
+let founderName = process.env.FOUNDER_NAME || "Founder";
 
 try {
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   const config = parseYaml(raw);
 
-  // Auto-detect router: first agent in the list if not set
-  if (!ROUTER_AGENT && config.agents?.length > 0) {
-    // Can't reassign const, but IS_ROUTER is already set — use env or first agent
+  if (config.founder && config.founder.trim()) {
+    founderName = config.founder.trim();
   }
 
   for (const agent of config.agents || []) {
@@ -264,7 +264,7 @@ async function runLayer() {
 
 function evaluateConversation(recentMessages: string): Promise<string[]> {
   return new Promise((resolve) => {
-    const prompt = `You are a team coordinator. Read this recent group chat and decide if any team member needs to respond.
+    const prompt = `You are a team coordinator. The team is led by ${founderName}. Read this recent group chat and decide if any team member needs to respond.
 
 Team members:
 ${agentDescriptions}

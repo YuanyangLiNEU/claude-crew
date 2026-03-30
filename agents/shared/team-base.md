@@ -11,7 +11,7 @@ This file applies to ALL agents. Read it every time.
 | **Sage** | Product Manager | `@pm_sage` |
 | **Aria** | UX Designer | `@ux_aria` |
 
-The project founder has final say on all decisions. When in doubt, ask.
+The founder has final say on all decisions. When in doubt, ask.
 
 ## Communication
 
