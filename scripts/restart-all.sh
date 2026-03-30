@@ -15,8 +15,10 @@ mkdir -p "$LOG_DIR" "$PID_DIR"
 # Load .env
 source "$ROOT/.env" 2>/dev/null || true
 
+# First agent in agents.yaml becomes the router (handles message routing)
+ROUTER_AGENT=""
+
 # Parse agents.yaml and start each agent
-# Uses a simple line-by-line parser (no yaml dependency needed in bash)
 current_name=""
 current_id=""
 current_dir=""
@@ -42,6 +44,7 @@ start_agent() {
   AGENT_ID="$id" \
   AGENT_DIR="$agent_dir" \
   EXTRA_DISALLOWED_TOOLS="$extra" \
+  ROUTER_AGENT="${ROUTER_AGENT:-}" \
   CONFIG_PATH="$ROOT/agents.yaml" \
   nohup npx tsx "$ROOT/src/index.ts" > "$LOG_DIR/$id.log" 2>&1 &
 
@@ -66,6 +69,11 @@ while IFS= read -r line; do
       current_extra="${line#*: }"
       current_extra="${current_extra#\"}"
       current_extra="${current_extra%\"}"
+      # First agent becomes the router
+      if [ -z "$ROUTER_AGENT" ]; then
+        ROUTER_AGENT="$current_id"
+        echo "Router: $current_name ($current_id)"
+      fi
       # This is the last field per agent — start it
       start_agent "$current_name" "$current_id" "$current_dir" "$current_token_env" "$current_extra"
       current_name="" current_id="" current_dir="" current_token_env="" current_extra=""

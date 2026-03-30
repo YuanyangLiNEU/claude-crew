@@ -66,25 +66,28 @@ In the Telegram group, @mention the bot you want to talk to. In DMs, each bot re
 
 ## How It Works
 
+### Tagged messages (direct)
 ```
-You send "@engineer_devin fix the login bug" in Telegram group
-         ↓
-All 4 bot processes receive the message (grammy polls Telegram)
-         ↓
-All 4 write it to shared/group-history.jsonl (shared context)
-         ↓
-Only Devin's process responds (checks @mention match)
-         ↓
-Coordinator reads last 50 messages from group history
-         ↓
-Spawns: claude -p --continue (from agents/engineer_devin/ directory)
-  → Claude Code loads CLAUDE.md (role) + root CLAUDE.md (project)
-  → Does the work, returns response
-         ↓
-Response sent to Telegram as HTML (markdown auto-converted)
-         ↓
-If response mentions @engineer_lark → written to shared/inbox/
-  → Lark's process picks it up, processes, replies
+"@engineer_devin fix the login bug"
+  → Goes directly to Devin's process → claude -p --continue → responds
+```
+
+### Non-tagged messages (smart routing)
+```
+"the email layout looks weird"
+  → Router agent (first in agents.yaml) logs to group-history.jsonl
+  → After 1s debounce, router calls Claude Sonnet:
+    "Read this conversation. Who should respond?"
+  → Sonnet returns "ux_aria"
+  → Router writes to shared/inbox/router-to-ux_aria-*.json
+  → Aria's process picks it up (polls every 1s) → responds
+```
+
+### Bot-to-bot handoff
+```
+Devin's response mentions @ux_aria
+  → Coordinator writes to shared/inbox/
+  → Aria picks it up and responds
 ```
 
 ## Configuration
@@ -216,11 +219,14 @@ The new agent is live. Message `@ember_qa_bot` in the group to test.
 
 ## Features
 
-- **Group chat context** — all agents see the full conversation history (last 50 messages)
+- **Smart routing** — conversation-aware layer reads recent chat and decides who should respond (1 Sonnet call, not 4)
+- **Group chat context** — all agents see the last 20 messages for context
 - **Cross-agent messaging** — agents @mention each other and messages route automatically
+- **Bot-to-bot handoff** — when one agent responds, the router evaluates if another should follow up
 - **Markdown rendering** — responses auto-converted to Telegram HTML (bold, code, links, etc.)
-- **"Still working" notices** — sent after 2 min of processing so you know the agent is alive
+- **"Still working" notices** — sent after 2 min of processing
 - **Per-role permissions** — control what each agent can/can't do via `extra_disallowed` in agents.yaml
+- **Response flexibility** — routed agents can stay silent if they have nothing to add
 - **DM support** — message any bot directly for private conversations
 - **Session continuity** — agents remember prior conversations via `--continue`
 

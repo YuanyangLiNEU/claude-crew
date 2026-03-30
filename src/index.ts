@@ -32,18 +32,35 @@ const EXTRA_DISALLOWED = (process.env.EXTRA_DISALLOWED_TOOLS || "")
   .split(",")
   .filter(Boolean);
 
-// Load agents.yaml to build mention routing table
+// Only one agent writes to group-history.jsonl AND handles routing
+const ROUTER_AGENT = process.env.ROUTER_AGENT || "";
+const IS_ROUTER = AGENT_ID === ROUTER_AGENT;
+
+// ── Load agents.yaml ────────────────────────────────────────
+
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(ROOT, "agents.yaml");
+
 let agentMentions: Record<string, string[]> = {};
+let agentDescriptions = "";
 
 try {
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   const config = parseYaml(raw);
+
+  // Auto-detect router: first agent in the list if not set
+  if (!ROUTER_AGENT && config.agents?.length > 0) {
+    // Can't reassign const, but IS_ROUTER is already set — use env or first agent
+  }
+
   for (const agent of config.agents || []) {
     agentMentions[agent.id] = [`@${agent.id}`, `@${agent.name.toLowerCase()}`];
   }
+
+  agentDescriptions = (config.agents || [])
+    .map((a: any) => `${a.id} (${a.name}): ${a.role || a.id}`)
+    .join("\n");
 } catch {
-  console.warn("Could not load agents.yaml — cross-agent messaging disabled");
+  console.warn("Could not load agents.yaml — cross-agent messaging and routing disabled");
 }
 
 // ── Shared Directories ──────────────────────────────────────
@@ -51,7 +68,7 @@ try {
 const SHARED_DIR = path.resolve(ROOT, "agents/shared");
 const INBOX_DIR = path.join(SHARED_DIR, "inbox");
 const HISTORY_FILE = path.join(SHARED_DIR, "group-history.jsonl");
-const MAX_HISTORY = 50;
+const MAX_HISTORY = 20;
 
 // ── Group Chat History ──────────────────────────────────────
 
@@ -103,45 +120,213 @@ const queue: Array<{
   fromUser: string;
   fromAgent?: string;
   isGroup: boolean;
+  mustRespond?: boolean;
 }> = [];
 
 bot.on("message:text", (ctx) => {
   const userId = String(ctx.from.id);
   const isGroup = ctx.chat.type === "group" || ctx.chat.type === "supergroup";
   const fromName = ctx.from.first_name || userId;
+  const isBot = ctx.from?.is_bot === true;
 
+  // Log ALL group messages to history (router agent only — both human and bot)
+  if (isGroup && IS_ROUTER) {
+    appendHistory(fromName, ctx.message.text);
+  }
+
+  // Bot messages: log to history but don't process or route — prevents infinite loops
+  // Bot-to-bot handoff happens through @mentions in responses, not the routing layer
+  if (isBot) {
+    return;
+  }
+
+  // Access control
   if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(userId)) {
     return;
   }
 
-  if (isGroup) {
-    appendHistory(fromName, ctx.message.text);
-  }
+  // Check if directly tagged
+  const textLower = ctx.message.text.toLowerCase();
+  const directlyTagged = isGroup && botUsername && textLower.includes(`@${botUsername.toLowerCase()}`);
+  const repliedTo = isGroup && ctx.message.reply_to_message?.from?.id === bot.botInfo.id;
 
-  if (isGroup) {
-    const text = ctx.message.text.toLowerCase();
-    const mentioned = botUsername && text.includes(`@${botUsername.toLowerCase()}`);
-    const replied = ctx.message.reply_to_message?.from?.id === bot.botInfo.id;
-    if (!mentioned && !replied) return;
-  }
-
+  // Strip bot @mention from message
   let text = ctx.message.text;
   if (botUsername) {
     text = text.replace(new RegExp(`@${botUsername}`, "gi"), "").trim();
   }
 
-  queue.push({ chatId: ctx.chat.id, text, fromUser: fromName, isGroup });
-  drain();
+  if (!isGroup || directlyTagged || repliedTo) {
+    // DM or directly tagged — this agent must respond
+    queue.push({ chatId: ctx.chat.id, text, fromUser: fromName, isGroup, mustRespond: true });
+    drain();
+  } else if (IS_ROUTER) {
+    // Non-tagged group message — schedule the routing layer
+    scheduleLayerCheck(ctx.chat.id);
+  }
 });
 
-// Capture bot messages in group (from other agents)
-bot.on("message", (ctx) => {
-  const isGroup = ctx.chat.type === "group" || ctx.chat.type === "supergroup";
-  if (!isGroup || !ctx.from?.is_bot) return;
-  const text = ctx.message?.text;
-  if (!text) return;
-  appendHistory(ctx.from.first_name || ctx.from.username || "Bot", text);
-});
+// ── Conversation-Aware Routing Layer (router agent only) ────
+
+let lastLayerCheckTs = 0;
+let pendingGroupChatId: number | null = null;
+const LAYER_DEBOUNCE_MS = 1_000;
+let layerTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleLayerCheck(chatId: number) {
+  pendingGroupChatId = chatId;
+  if (layerTimer) clearTimeout(layerTimer);
+  layerTimer = setTimeout(() => runLayer(), LAYER_DEBOUNCE_MS);
+}
+
+async function runLayer() {
+  layerTimer = null;
+  if (!pendingGroupChatId) return;
+
+  const chatId = pendingGroupChatId;
+
+  let recentMessages = "";
+  try {
+    const raw = fs.readFileSync(HISTORY_FILE, "utf-8").trim();
+    if (!raw) return;
+    const lines = raw.split("\n").slice(-15);
+    const entries: HistoryEntry[] = lines
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+    if (entries.length === 0) return;
+
+    const newEntries = lastLayerCheckTs > 0
+      ? entries.filter(e => e.ts > lastLayerCheckTs)
+      : entries.slice(-5);
+
+    if (newEntries.length === 0) return;
+
+    recentMessages = entries
+      .map((e) => `${e.from}: ${e.text.slice(0, 200)}`)
+      .join("\n");
+  } catch {
+    return;
+  }
+
+  lastLayerCheckTs = Date.now();
+
+  const agents = await evaluateConversation(recentMessages);
+
+  if (agents.length === 0) {
+    console.log(`  [ROUTER] No action needed`);
+    return;
+  }
+
+  // Get the last human message
+  let lastHumanMsg = "";
+  let lastHumanFrom = "";
+  try {
+    const raw = fs.readFileSync(HISTORY_FILE, "utf-8").trim();
+    const lines = raw.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (!entry.from.includes("(")) {
+          lastHumanMsg = entry.text;
+          lastHumanFrom = entry.from;
+          break;
+        }
+      } catch {}
+    }
+  } catch {}
+
+  if (!lastHumanMsg) return;
+
+  for (const agentId of agents) {
+    if (agentId === AGENT_ID) {
+      queue.push({ chatId, text: lastHumanMsg, fromUser: lastHumanFrom, isGroup: true, mustRespond: true });
+      drain();
+    } else {
+      const message = {
+        from: lastHumanFrom,
+        fromAgentId: "router",
+        text: lastHumanMsg,
+        chatId,
+        timestamp: Date.now(),
+      };
+      const filename = `router-to-${agentId}-${Date.now()}.json`;
+      const filepath = path.join(INBOX_DIR, filename);
+      try {
+        fs.mkdirSync(INBOX_DIR, { recursive: true });
+        fs.writeFileSync(filepath, JSON.stringify(message, null, 2));
+        console.log(`  [ROUTER] Routed to ${agentId}`);
+      } catch (err: any) {
+        console.error(`  [ROUTER] Failed to route to ${agentId}:`, err.message);
+      }
+    }
+  }
+}
+
+function evaluateConversation(recentMessages: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    const prompt = `You are a team coordinator. Read this recent group chat and decide if any team member needs to respond.
+
+Team members:
+${agentDescriptions}
+
+Recent conversation:
+${recentMessages}
+
+Rules:
+- Reply with ONLY agent IDs (comma-separated), e.g. "engineer_devin" or "pm_sage,ux_aria"
+- Reply "NONE" if:
+  - The conversation is resolved or just casual chat
+  - It's a general question anyone could answer (let humans handle it)
+  - Someone already answered adequately
+- Only route when a message clearly needs a SPECIFIC role's expertise
+- Prefer routing to ONE agent. Route to multiple only when genuinely different expertise is needed
+- When in doubt, reply "NONE" — it's better to not route than to over-route`;
+
+    const args = [
+      "-p",
+      "--model", "sonnet",
+      "--output-format", "text",
+      "--dangerously-skip-permissions",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--",
+      prompt,
+    ];
+
+    console.log(`  [ROUTER] Evaluating conversation (sonnet)...`);
+
+    const proc = spawn(CLAUDE_PATH, args, {
+      cwd: AGENT_DIR,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+
+    const timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      resolve([]);
+    }, 30_000);
+
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      const result = stdout.trim().toUpperCase();
+      if (code !== 0 || result === "NONE" || !result) {
+        resolve([]);
+        return;
+      }
+      const agents = result.toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
+      console.log(`  [ROUTER] Decision: ${agents.join(", ") || "NONE"}`);
+      resolve(agents);
+    });
+
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve([]);
+    });
+  });
+}
 
 // ── Queue Processor ─────────────────────────────────────────
 
@@ -151,7 +336,7 @@ async function drain() {
 
   const msg = queue.shift()!;
   const source = msg.fromAgent || msg.fromUser;
-  console.log(`[${AGENT_NAME}] Processing: "${msg.text.slice(0, 80)}..." from ${source}`);
+  console.log(`[AGENT] [${AGENT_NAME}] Processing: "${msg.text.slice(0, 80)}..." from ${source}`);
 
   const startTime = Date.now();
   let notified = false;
@@ -173,11 +358,14 @@ async function drain() {
     const response = await callClaude(prompt, AGENT_DIR);
     clearInterval(typingInterval);
 
-    if (!response.trim()) {
-      await bot.api.sendMessage(msg.chatId, "(no response)");
+    // If agent has nothing to say on a non-mandatory message, stay silent
+    if (!response.trim() || (!msg.mustRespond && /^(SKIP|PASS|N\/A|nothing to add)/i.test(response.trim()))) {
+      if (msg.mustRespond && !response.trim()) {
+        await bot.api.sendMessage(msg.chatId, "(no response)");
+      } else {
+        console.log(`  → No response needed`);
+      }
     } else {
-      appendHistory(AGENT_NAME, response.slice(0, 500));
-
       for (const chunk of splitMessage(response)) {
         const html = markdownToTelegramHtml(chunk);
         try {
@@ -187,13 +375,16 @@ async function drain() {
         }
       }
 
-      forwardToMentionedAgents(response, msg.chatId);
+      // Only forward @mentions if human-initiated (prevents cascades)
+      if (msg.mustRespond) {
+        forwardToMentionedAgents(response, msg.chatId);
+      }
     }
   } catch (err: any) {
     clearInterval(typingInterval);
     const errMsg = err.message?.slice(0, 500) || "Unknown error";
     await bot.api.sendMessage(msg.chatId, `Error: ${errMsg}`);
-    console.error(`[${AGENT_NAME}] Error:`, err.message);
+    console.error(`[AGENT] [${AGENT_NAME}] Error:`, err.message);
   }
 
   busy = false;
@@ -244,15 +435,21 @@ function watchInbox() {
         try {
           const raw = fs.readFileSync(filepath, "utf-8");
           const msg = JSON.parse(raw);
+
           fs.unlinkSync(filepath);
-          console.log(`[${AGENT_NAME}] Inbox: message from ${msg.from}`);
+
+          console.log(`[AGENT] [${AGENT_NAME}] Inbox: message from ${msg.from}`);
+
+          const isFromRouter = msg.fromAgentId === "router";
           queue.push({
             chatId: msg.chatId,
             text: msg.text,
             fromUser: msg.from,
-            fromAgent: msg.from,
+            fromAgent: isFromRouter ? undefined : msg.from,
             isGroup: true,
+            mustRespond: !isFromRouter,
           });
+
           drain();
         } catch (err: any) {
           console.error(`  → Failed to process inbox file ${file}:`, err.message);
@@ -260,7 +457,7 @@ function watchInbox() {
         }
       }
     } catch {}
-  }, 3_000);
+  }, 1_000);
 }
 
 // ── Claude Code CLI ─────────────────────────────────────────
@@ -374,6 +571,7 @@ function splitMessage(text: string, maxLen = 4000): string[] {
 console.log(`Claude Crew Agent: ${AGENT_NAME}`);
 console.log(`  Agent ID: ${AGENT_ID}`);
 console.log(`  Agent dir: ${AGENT_DIR}`);
+console.log(`  Router: ${IS_ROUTER ? "YES" : "no"}`);
 console.log(`  Allowed users: ${ALLOWED_USERS.length ? ALLOWED_USERS.join(", ") : "all"}`);
 console.log("");
 
