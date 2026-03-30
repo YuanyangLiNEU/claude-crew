@@ -7,26 +7,26 @@ agents:
     id: engineer_devin         # Unique ID, used for @mentions and routing
     role: engineer             # Shared profile: agents/shared/engineer-base.md
     dir: ./agents/engineer_devin
-    bot_token_env: ENGINEER_BOT_TOKEN
+    bot_token_env: ENGINEER_DEVIN_BOT_TOKEN
     extra_disallowed: ""       # Extra tools to block (on top of global rm -rf)
 
   - name: Lark
     id: engineer_lark
     role: engineer
     dir: ./agents/engineer_lark
-    bot_token_env: ENGINEER2_BOT_TOKEN
+    bot_token_env: ENGINEER_LARK_BOT_TOKEN
     extra_disallowed: ""
 
   - name: Sage
     id: pm_sage
     role: pm
     dir: ./agents/pm_sage
-    bot_token_env: PM_BOT_TOKEN
+    bot_token_env: PM_SAGE_BOT_TOKEN
     extra_disallowed: "Edit,Bash(npm install *)"
 
   - name: Aria
     id: ux_aria
     role: ux
     dir: ./agents/ux_aria
-    bot_token_env: UX_BOT_TOKEN
+    bot_token_env: UX_ARIA_BOT_TOKEN
     extra_disallowed: "Edit,Read,Glob,Grep,Bash(npm install *)"

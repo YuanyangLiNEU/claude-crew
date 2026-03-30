@@ -99,7 +99,7 @@ agents:
     id: engineer_devin         # Unique ID (role + name), used for @mentions
     role: engineer             # Shared profile: agents/shared/engineer-base.md
     dir: ./agents/engineer_devin
-    bot_token_env: ENGINEER_BOT_TOKEN
+    bot_token_env: ENGINEER_DEVIN_BOT_TOKEN
     extra_disallowed: ""
 ```
 
