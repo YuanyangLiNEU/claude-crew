@@ -129,15 +129,14 @@ bot.on("message:text", (ctx) => {
   const fromName = ctx.from.first_name || userId;
   const isBot = ctx.from?.is_bot === true;
 
-  // Log ALL group messages to history (router agent only — both human and bot)
-  if (isGroup && IS_ROUTER) {
-    appendHistory(fromName, ctx.message.text);
-  }
-
-  // Bot messages: log to history but don't process or route — prevents infinite loops
-  // Bot-to-bot handoff happens through @mentions in responses, not the routing layer
+  // Bot messages: don't process or route. Each agent logs its own response when sending.
   if (isBot) {
     return;
+  }
+
+  // Log human group messages to history (router agent only)
+  if (isGroup && IS_ROUTER) {
+    appendHistory(fromName, ctx.message.text);
   }
 
   // Access control
@@ -217,7 +216,19 @@ async function runLayer() {
     return;
   }
 
-  // Get the last human message
+  // Get the last human message (not from any agent)
+  const agentNames = new Set(Object.values(agentMentions).flat().map(m => m.replace("@", ""))
+    .concat(Object.keys(agentMentions)));
+  // Also add display names from agents.yaml
+  try {
+    const raw2 = fs.readFileSync(CONFIG_PATH, "utf-8");
+    const config2 = parseYaml(raw2);
+    for (const a of config2.agents || []) {
+      agentNames.add(a.name);
+      agentNames.add(AGENT_NAME); // current agent's display name
+    }
+  } catch {}
+
   let lastHumanMsg = "";
   let lastHumanFrom = "";
   try {
@@ -226,7 +237,7 @@ async function runLayer() {
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]);
-        if (!entry.from.includes("(")) {
+        if (!agentNames.has(entry.from)) {
           lastHumanMsg = entry.text;
           lastHumanFrom = entry.from;
           break;
@@ -284,7 +295,7 @@ Rules:
 
     const args = [
       "-p",
-      "--model", "haiku",
+      "--model", "sonnet",
       "--output-format", "text",
       "--dangerously-skip-permissions",
       "--strict-mcp-config",
@@ -293,7 +304,7 @@ Rules:
       prompt,
     ];
 
-    console.log(`  [ROUTER] Evaluating conversation (haiku)...`);
+    console.log(`  [ROUTER] Evaluating conversation (sonnet)...`);
 
     const proc = spawn(CLAUDE_PATH, args, {
       cwd: AGENT_DIR,
@@ -312,13 +323,17 @@ Rules:
     proc.on("close", (code) => {
       clearTimeout(timer);
       const response = stdout.trim().toLowerCase();
-      if (code !== 0 || !response || response.includes("none")) {
+      const firstWord = response.split(/[\s,]/)[0];
+      if (code !== 0 || !response || firstWord === "none") {
         resolve([]);
         return;
       }
-      // Extract valid agent IDs from anywhere in the response
+      // Extract valid agent IDs using word boundary matching
       const validIds = Object.keys(agentMentions);
-      const matched = validIds.filter(id => response.includes(id));
+      const matched = validIds.filter(id => {
+        const regex = new RegExp(`\\b${id.replace(/_/g, "[_ ]")}\\b`);
+        return regex.test(response);
+      });
       console.log(`  [ROUTER] Decision: ${matched.join(", ") || "NONE"}`);
       resolve(matched);
     });
@@ -368,6 +383,9 @@ async function drain() {
         console.log(`  → No response needed`);
       }
     } else {
+      // Every agent logs its own response to history (bot messages aren't visible to other bots in Telegram)
+      appendHistory(AGENT_NAME, response.slice(0, 500));
+
       for (const chunk of splitMessage(response)) {
         const html = markdownToTelegramHtml(chunk);
         try {
@@ -377,10 +395,8 @@ async function drain() {
         }
       }
 
-      // Only forward @mentions if human-initiated (prevents cascades)
-      if (msg.mustRespond) {
-        forwardToMentionedAgents(response, msg.chatId);
-      }
+      // Forward @mentions to other agents
+      forwardToMentionedAgents(response, msg.chatId);
     }
   } catch (err: any) {
     clearInterval(typingInterval);
