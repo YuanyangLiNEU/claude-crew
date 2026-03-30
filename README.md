@@ -1,14 +1,22 @@
 # Claude Crew
 
-Run a team of AI agents on Telegram, powered by [Claude Code](https://claude.ai/code).
+Your AI startup team on Telegram. Powered by [Claude Code](https://claude.ai/code).
 
-Each agent is a Claude Code instance with a defined role (engineer, PM, UX designer, etc.) that collaborates in a Telegram group chat. Agents can @mention each other, share context, and work together — with you as the decision-maker.
+Spin up a full team — engineers, PM, UX designer — and talk to them in a Telegram group chat just like you would with real teammates. Describe what you want to build, and they'll research, plan, code, review, and ship it. You're the founder. They're your crew.
 
 <img src="docs/demo.png" alt="Claude Crew demo — team introduction in Telegram" width="500">
 
 ## Why?
 
-Claude Code's built-in [Telegram channel plugin has reliability issues](https://github.com/anthropics/claude-code/issues/36477) — it stops processing messages after the first response. Claude Crew bypasses this entirely with a lightweight coordinator (grammy + `claude -p`) that's fully reliable.
+**Building software should feel like talking to your team, not wrestling with tools.**
+
+- **One command, full team.** Two engineers (with peer code review), a PM, and a UX designer — ready to go
+- **Natural conversation.** Talk in Telegram like you would in Slack. @mention someone, or just say what you need — a smart router figures out who should respond
+- **Agents collaborate.** They tag each other, hand off work, review code, and push back when something doesn't make sense
+- **You stay in control.** Agents can code, research, and propose — but deploying and shipping requires your approval
+- **Each agent is a full Claude Code instance.** Not a chatbot wrapper — they can read/write code, run tests, search the web, and use every tool Claude Code has
+
+> **Note:** Claude Code has a built-in [Telegram channel plugin](https://github.com/anthropics/claude-code/issues/36477), but it stops processing messages after the first response. Claude Crew bypasses this entirely with a reliable coordinator architecture.
 
 ## The Default Team
 
