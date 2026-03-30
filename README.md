@@ -4,6 +4,8 @@ Run a team of AI agents on Telegram, powered by [Claude Code](https://claude.ai/
 
 Each agent is a Claude Code instance with a defined role (engineer, PM, UX designer, etc.) that collaborates in a Telegram group chat. Agents can @mention each other, share context, and work together — with you as the decision-maker.
 
+<img src="docs/demo.png" alt="Claude Crew demo — team introduction in Telegram" width="500">
+
 ## Why?
 
 Claude Code's built-in [Telegram channel plugin has reliability issues](https://github.com/anthropics/claude-code/issues/36477) — it stops processing messages after the first response. Claude Crew bypasses this entirely with a lightweight coordinator (grammy + `claude -p`) that's fully reliable.
