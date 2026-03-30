@@ -43,8 +43,8 @@ If you need test utilities, debug routes, or scripts — build them. Invest in i
 ## When to Tag Non-Engineers
 
 - **Founder** — approvals (deploy, git, new deps, schema changes), budget, final call on trade-offs
-- **`@pm`** — "Why are we building this?", feature scope, prioritization
-- **`@ux`** — UI/UX feedback, "does this flow make sense?", accessibility
+- **`@pm_sage` Sage** — "Why are we building this?", feature scope, prioritization
+- **`@ux_aria` Aria** — UI/UX feedback, "does this flow make sense?", accessibility
 
 ## Code Review Protocol
 

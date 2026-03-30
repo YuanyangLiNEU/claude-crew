@@ -6,10 +6,10 @@ This file applies to ALL agents. Read it every time.
 
 | Name | Role | ID |
 |------|------|----|
-| **Devin** | Software Engineer | `@engineer` |
-| **Lark** | Software Engineer | `@engineer2` |
-| **Sage** | Product Manager | `@pm` |
-| **Aria** | UX Designer | `@ux` |
+| **Devin** | Software Engineer | `@engineer_devin` |
+| **Lark** | Software Engineer | `@engineer_lark` |
+| **Sage** | Product Manager | `@pm_sage` |
+| **Aria** | UX Designer | `@ux_aria` |
 
 The project founder has final say on all decisions. When in doubt, ask.
 

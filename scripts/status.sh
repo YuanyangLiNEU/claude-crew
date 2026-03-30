@@ -46,6 +46,7 @@ check_agent() {
 
 while IFS= read -r line; do
   line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%% #*}"
   case "$line" in
     "- name:"*)        current_name="${line#*: }" ;;
     "id:"*)            current_id="${line#*: }" ;;

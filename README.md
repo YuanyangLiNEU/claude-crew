@@ -12,10 +12,10 @@ Claude Code's built-in [Telegram channel plugin has reliability issues](https://
 
 | Agent | Role | Capabilities |
 |-------|------|-------------|
-| **Devin** (`@engineer`) | Software Engineer | Full code access, tests, deploys (with approval) |
-| **Lark** (`@engineer2`) | Software Engineer | Same as Devin — peer code review with each other |
-| **Sage** (`@pm`) | Product Manager | Web research, dashboard access, no code editing |
-| **Aria** (`@ux`) | UX Designer | Live product evaluation only, no file access |
+| **Devin** (`@engineer_devin`) | Software Engineer | Full code access, tests, deploys (with approval) |
+| **Lark** (`@engineer_lark`) | Software Engineer | Same as Devin — peer code review with each other |
+| **Sage** (`@pm_sage`) | Product Manager | Web research, dashboard access, no code editing |
+| **Aria** (`@ux_aria`) | UX Designer | Live product evaluation only, no file access |
 
 ## Quick Start
 
@@ -44,12 +44,13 @@ cd claude-crew
 npm install
 
 cp .env.example .env
-# Paste your bot tokens and Telegram user ID in .env
+# Paste your bot tokens in .env
+# Add your Telegram user ID to ALLOWED_USERS (message @userinfobot to find it)
 ```
 
 ### 4. Set up your project
 
-Put your project's `CLAUDE.md` in the root directory so all agents have project context. Then customize `agents.yaml` and the role CLAUDE.md files for your project.
+Optionally, create a `CLAUDE.md` in the root directory with your project context (architecture, key files, commands). All agents will auto-load it. Then customize `agents.yaml` and the role CLAUDE.md files for your project.
 
 ### 5. Start
 
@@ -66,7 +67,7 @@ In the Telegram group, @mention the bot you want to talk to. In DMs, each bot re
 ## How It Works
 
 ```
-You send "@devin fix the login bug" in Telegram group
+You send "@engineer_devin fix the login bug" in Telegram group
          ↓
 All 4 bot processes receive the message (grammy polls Telegram)
          ↓
@@ -76,13 +77,13 @@ Only Devin's process responds (checks @mention match)
          ↓
 Coordinator reads last 50 messages from group history
          ↓
-Spawns: claude -p --continue (from agents/engineer/ directory)
+Spawns: claude -p --continue (from agents/engineer_devin/ directory)
   → Claude Code loads CLAUDE.md (role) + root CLAUDE.md (project)
   → Does the work, returns response
          ↓
 Response sent to Telegram as HTML (markdown auto-converted)
          ↓
-If response mentions @lark → written to shared/inbox/
+If response mentions @engineer_lark → written to shared/inbox/
   → Lark's process picks it up, processes, replies
 ```
 
@@ -95,9 +96,9 @@ Define your team. Each agent needs a name, ID, directory, and bot token:
 ```yaml
 agents:
   - name: Devin
-    id: engineer
-    role: engineer
-    dir: ./agents/engineer
+    id: engineer_devin         # Unique ID (role + name), used for @mentions
+    role: engineer             # Shared profile: agents/shared/engineer-base.md
+    dir: ./agents/engineer_devin
     bot_token_env: ENGINEER_BOT_TOKEN
     extra_disallowed: ""
 ```
@@ -123,10 +124,10 @@ claude-crew/
     stop-all.sh            # Stop all agents
     status.sh              # Check agent status
   agents/
-    engineer/CLAUDE.md     # Devin's role
-    engineer2/CLAUDE.md    # Lark's role
-    pm/CLAUDE.md           # Sage's role
-    ux/CLAUDE.md           # Aria's role
+    engineer_devin/CLAUDE.md  # Devin's role
+    engineer_lark/CLAUDE.md   # Lark's role
+    pm_sage/CLAUDE.md         # Sage's role
+    ux_aria/CLAUDE.md         # Aria's role
     shared/
       team-base.md         # Shared team profile
       engineer-base.md     # Shared engineer profile
@@ -157,10 +158,10 @@ QA_BOT_TOKEN=<paste token from BotFather>
 ### 3. Create the role
 
 ```bash
-mkdir -p agents/qa
+mkdir -p agents/qa_ember
 ```
 
-Create `agents/qa/CLAUDE.md`:
+Create `agents/qa_ember/CLAUDE.md`:
 ```markdown
 # Role: Ember — QA Engineer
 
@@ -189,9 +190,9 @@ Read `agents/shared/team-base.md` — team-wide info, communication, escalation.
 
 ```yaml
   - name: Ember
-    id: qa
-    role: qa
-    dir: ./agents/qa
+    id: qa_ember
+    role: qa             # Optional — create agents/shared/qa-base.md if needed
+    dir: ./agents/qa_ember
     bot_token_env: QA_BOT_TOKEN
     extra_disallowed: ""
 ```
