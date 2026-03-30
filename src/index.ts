@@ -293,7 +293,7 @@ Rules:
       prompt,
     ];
 
-    console.log(`  [ROUTER] Evaluating conversation (sonnet)...`);
+    console.log(`  [ROUTER] Evaluating conversation (haiku)...`);
 
     const proc = spawn(CLAUDE_PATH, args, {
       cwd: AGENT_DIR,
@@ -311,14 +311,16 @@ Rules:
 
     proc.on("close", (code) => {
       clearTimeout(timer);
-      const result = stdout.trim().toUpperCase();
-      if (code !== 0 || result === "NONE" || !result) {
+      const response = stdout.trim().toLowerCase();
+      if (code !== 0 || !response || response.includes("none")) {
         resolve([]);
         return;
       }
-      const agents = result.toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
-      console.log(`  [ROUTER] Decision: ${agents.join(", ") || "NONE"}`);
-      resolve(agents);
+      // Extract valid agent IDs from anywhere in the response
+      const validIds = Object.keys(agentMentions);
+      const matched = validIds.filter(id => response.includes(id));
+      console.log(`  [ROUTER] Decision: ${matched.join(", ") || "NONE"}`);
+      resolve(matched);
     });
 
     proc.on("error", () => {
