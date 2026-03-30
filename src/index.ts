@@ -284,7 +284,7 @@ Rules:
 
     const args = [
       "-p",
-      "--model", "sonnet",
+      "--model", "haiku",
       "--output-format", "text",
       "--dangerously-skip-permissions",
       "--strict-mcp-config",
