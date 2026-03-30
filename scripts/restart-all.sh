@@ -57,8 +57,9 @@ while IFS= read -r line; do
   # Trim whitespace
   line="${line#"${line%%[![:space:]]*}"}"
 
-  # Strip inline comments (everything after " #")
+  # Strip inline comments (everything after " #") and trailing whitespace
   line="${line%% #*}"
+  line="${line%"${line##*[![:space:]]}"}"
 
   case "$line" in
     "- name:"*)    current_name="${line#*: }" ;;
