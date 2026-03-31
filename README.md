@@ -6,15 +6,22 @@ Spin up a full team — engineers, PM, UX designer — and talk to them in a Tel
 
 <img src="docs/demo.png" alt="Claude Crew demo — team introduction in Telegram" width="500">
 
-## Why?
+## Why Claude Crew?
 
-**Building software should feel like talking to your team, not wrestling with tools.**
+Most multi-agent frameworks (AutoGen, CrewAI, LangGraph) give you a Python SDK. You define agents in code, wire up orchestration logic, and run everything in a script. Claude Crew takes a different approach:
 
-- **One command, full team.** Two engineers (with peer code review), a PM, and a UX designer — ready to go
-- **Natural conversation.** Talk in Telegram like you would in Slack. @mention someone, or just say what you need — a smart router figures out who should respond
-- **Agents collaborate.** They tag each other, hand off work, review code, and push back when something doesn't make sense
-- **You stay in control.** Agents can code, research, and propose — but deploying and shipping requires your approval
-- **Each agent is a full Claude Code instance.** Not a chatbot wrapper — they can read/write code, run tests, search the web, and use every tool Claude Code has
+**Talk to your team in Telegram like you would in Slack.**
+
+| | Claude Crew | Typical frameworks |
+|--|-------------|-------------------|
+| **Interface** | Real Telegram group chat | CLI / SDK / notebook |
+| **Each agent** | Full Claude Code instance (code, terminal, web, MCP tools) | LLM API call with tool wrappers |
+| **Routing** | 1 Sonnet call reads the conversation and decides who responds | You write orchestration code, or every agent gets called |
+| **Permissions** | Per-role tool restrictions (PM can't edit code, UX can't read files) | All agents have the same access |
+| **Model per agent** | Configure per-agent (opus for engineers, sonnet for PM) | Usually one model for all |
+| **Cost tracking** | Built-in: CLI summary + web dashboard with cache token breakdown | In-memory dicts (AutoGen) or nothing |
+| **Memory** | Session continuity via `--continue` + shared group history | Varies — often none across runs |
+| **Setup** | `agents.yaml` + CLAUDE.md files | Python code |
 
 > **Note:** Claude Code has a built-in [Telegram channel plugin](https://github.com/anthropics/claude-code/issues/36477), but it stops processing messages after the first response. Claude Crew bypasses this entirely with a reliable coordinator architecture.
 
@@ -26,6 +33,36 @@ Spin up a full team — engineers, PM, UX designer — and talk to them in a Tel
 | **Lark** (`@engineer_lark`) | Software Engineer | Same as Devin — peer code review with each other |
 | **Sage** (`@pm_sage`) | Product Manager | Web research, dashboard access, no code editing |
 | **Aria** (`@ux_aria`) | UX Designer | Live product evaluation only, no file access |
+
+## Features
+
+### Smart routing
+One Sonnet call reads the recent conversation and decides who should respond — not 4 parallel calls where 3 return "SKIP". Just say what you need; the right agent picks it up.
+
+### Full Claude Code agents
+Each agent is a complete Claude Code instance. They can read/write code, run tests, execute shell commands, search the web, and use any MCP tool — not just chat.
+
+### Per-role permissions
+Engineers get full code access. PM can research but can't edit files. UX can evaluate the live product but can't read source code. Configured per-agent via `extra_disallowed` in `agents.yaml`.
+
+### Per-agent model selection
+Run engineers on Opus for complex code tasks, PM on Sonnet for faster/cheaper responses, or Haiku for the router. Set `model` per agent in `agents.yaml`. Default: Sonnet.
+
+### Cost tracking
+Every API call is logged with full token breakdown (cache read, cache write, new input, output). View costs via CLI (`npm run costs`) or web dashboard (`npm run costs:dashboard`).
+
+### Agent collaboration
+Agents @mention each other in responses and messages route automatically via a shared inbox. Devin can tag Aria for design review; Sage can ask Lark for a feasibility check.
+
+### Session memory
+Agents remember prior conversations across calls via `--continue`. Ask Devin to fix a bug, come back an hour later and say "what about the tests?" — he knows what you're talking about.
+
+### Everything else
+- **Group chat context** — all agents see the last 20 messages
+- **DM support** — message any bot directly for private conversations
+- **Markdown rendering** — responses auto-converted to Telegram HTML
+- **"Still working" notices** — sent after 2 min of processing
+- **Response flexibility** — routed agents can stay silent if they have nothing to add
 
 ## Quick Start
 
@@ -118,6 +155,7 @@ agents:
     role: engineer             # Shared profile: agents/shared/engineer-base.md
     dir: ./agents/engineer_devin
     bot_token_env: ENGINEER_DEVIN_BOT_TOKEN
+    model: ""                  # LLM model: opus, sonnet, haiku (default: sonnet)
     extra_disallowed: ""       # Extra tools to block (on top of global rm -rf)
 ```
 
@@ -141,6 +179,8 @@ claude-crew/
     restart-all.sh         # Start/restart all agents
     stop-all.sh            # Stop all agents
     status.sh              # Check agent status
+    costs.sh               # CLI cost summary
+    costs-server.ts        # Web cost dashboard
   agents/
     engineer_devin/CLAUDE.md  # Devin's role
     engineer_lark/CLAUDE.md   # Lark's role
@@ -152,6 +192,7 @@ claude-crew/
       chatlog.md           # Cross-agent work log
       inbox/               # Cross-agent message queue
       group-history.jsonl  # Rolling group chat history
+      costs.jsonl          # API cost log (auto-generated)
 ```
 
 ## Adding a New Agent
@@ -232,19 +273,6 @@ npm run start:all
 
 The new agent is live. Message `@ember_qa_bot` in the group to test.
 
-## Features
-
-- **Smart routing** — conversation-aware layer reads recent chat and decides who should respond (1 Sonnet call, not 4)
-- **Group chat context** — all agents see the last 20 messages for context
-- **Cross-agent messaging** — agents @mention each other and messages route automatically
-- **Bot-to-bot handoff** — agents @mention each other in responses, messages route via inbox
-- **Markdown rendering** — responses auto-converted to Telegram HTML (bold, code, links, etc.)
-- **"Still working" notices** — sent after 2 min of processing
-- **Per-role permissions** — control what each agent can/can't do via `extra_disallowed` in agents.yaml
-- **Response flexibility** — routed agents can stay silent if they have nothing to add
-- **DM support** — message any bot directly for private conversations
-- **Session continuity** — agents remember prior conversations via `--continue`
-
 ## Requirements
 
 - [Claude Code](https://claude.ai/code) installed and authenticated (`claude --version`)
@@ -288,11 +316,38 @@ In practice, this means:
 - The cost penalty grows as the session grows
 - The bug affects all `--continue` calls, not just long gaps between messages
 
+### Monitoring costs
+
+Every API call (both agent and router) is automatically logged to `agents/shared/costs.jsonl` with full token breakdown.
+
+**CLI summary:**
+```bash
+npm run costs
+```
+```
+Devin:
+  $0.3947   112,287 in /   677 out  Fix "Also Today" staleness — tell Gemini...
+  $0.0312    10,588 in /   296 out  What's the status of the login bug?
+  Total: $0.4259 (2 calls)
+
+Router:
+  $0.0304  What should we build next?
+  Total: $0.0304 (1 calls)
+
+Grand total: $0.4563 (3 calls)
+```
+
+**Web dashboard:**
+```bash
+npm run costs:dashboard    # opens http://localhost:3100
+```
+Shows summary cards (grand total, agent vs router costs, call count) and per-agent tables with time, model, message, token breakdown (cache read + cache create + new), output tokens, and cost.
+
 ### Recommendations
 
 - **Wait for the fix** — the bug is tracked and assigned. Once patched, caching will work correctly and costs will drop ~10x automatically.
 - **Periodically reset sessions** — delete session files to prevent unbounded growth (see below).
-- **Monitor costs** — check your Anthropic dashboard or add cost tracking (parse `--output-format json` for `total_cost_usd` and `usage` fields).
+- **Monitor costs** — use `npm run costs` or `npm run costs:dashboard` to track spending.
 
 ### Resetting sessions
 

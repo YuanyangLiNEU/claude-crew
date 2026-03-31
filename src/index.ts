@@ -32,6 +32,8 @@ const EXTRA_DISALLOWED = (process.env.EXTRA_DISALLOWED_TOOLS || "")
   .split(",")
   .filter(Boolean);
 
+const AGENT_MODEL = process.env.AGENT_MODEL || "sonnet";
+
 // Only one agent writes to group-history.jsonl AND handles routing
 const ROUTER_AGENT = process.env.ROUTER_AGENT || "";
 const IS_ROUTER = AGENT_ID === ROUTER_AGENT;
@@ -296,7 +298,7 @@ Rules:
     const args = [
       "-p",
       "--model", "sonnet",
-      "--output-format", "text",
+      "--output-format", "json",
       "--dangerously-skip-permissions",
       "--strict-mcp-config",
       "--no-session-persistence",
@@ -322,7 +324,19 @@ Rules:
 
     proc.on("close", (code) => {
       clearTimeout(timer);
-      const response = stdout.trim().toLowerCase();
+
+      let response = "";
+      try {
+        const json = JSON.parse(stdout.trim());
+        response = (json.result || "").toLowerCase();
+        const cost = json.total_cost_usd || 0;
+        const model = Object.keys(json.modelUsage || {})[0] || "unknown";
+        console.log(`  [ROUTER] Cost: $${cost.toFixed(4)} | ${model}`);
+        logCost(AGENT_NAME, "router", cost, json.usage || {}, recentMessages.split("\n").pop() || "", model);
+      } catch {
+        response = stdout.trim().toLowerCase();
+      }
+
       const firstWord = response.split(/[\s,]/)[0];
       if (code !== 0 || !response || firstWord === "none") {
         resolve([]);
@@ -372,7 +386,7 @@ async function drain() {
       ? `${history}[Message from ${msg.fromAgent} in the team chat]\n${msg.text}`
       : `${history}${msg.fromUser}: ${msg.text}`;
 
-    const response = await callClaude(prompt, AGENT_DIR);
+    const response = await callClaude(prompt, AGENT_DIR, msg.text);
     clearInterval(typingInterval);
 
     // If agent has nothing to say on a non-mandatory message, stay silent
@@ -478,16 +492,40 @@ function watchInbox() {
   }, 1_000);
 }
 
+// ── Cost Tracking ───────────────────────────────────────────
+
+const COST_FILE = path.join(SHARED_DIR, "costs.jsonl");
+
+function logCost(agent: string, type: string, cost: number, usage: any, message: string, model: string) {
+  const entry = {
+    ts: Date.now(),
+    agent,
+    type,
+    cost,
+    model,
+    inputTokens: usage.input_tokens || 0,
+    cacheReadTokens: usage.cache_read_input_tokens || 0,
+    cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+    outputTokens: usage.output_tokens || 0,
+    message: message.split(/\s+/).slice(0, 10).join(" "),
+  };
+  try {
+    fs.mkdirSync(path.dirname(COST_FILE), { recursive: true });
+    fs.appendFileSync(COST_FILE, JSON.stringify(entry) + "\n");
+  } catch {}
+}
+
 // ── Claude Code CLI ─────────────────────────────────────────
 
-function callClaude(message: string, cwd: string): Promise<string> {
+function callClaude(message: string, cwd: string, rawMessage?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const disallowed = ["Bash(rm -rf *)", ...EXTRA_DISALLOWED];
 
     const args = [
       "-p",
       "--continue",
-      "--output-format", "text",
+      "--model", AGENT_MODEL,
+      "--output-format", "json",
       "--dangerously-skip-permissions",
       "--strict-mcp-config",
       ...(disallowed.length ? ["--disallowedTools", ...disallowed] : []),
@@ -511,7 +549,16 @@ function callClaude(message: string, cwd: string): Promise<string> {
 
     proc.on("close", (code) => {
       if (code === 0) {
-        resolve(stdout.trim());
+        try {
+          const json = JSON.parse(stdout.trim());
+          const cost = json.total_cost_usd || 0;
+          const model = Object.keys(json.modelUsage || {})[0] || "unknown";
+          console.log(`  → Cost: $${cost.toFixed(4)} | ${model}`);
+          logCost(AGENT_NAME, "agent", cost, json.usage || {}, rawMessage || message, model);
+          resolve(json.result || "");
+        } catch {
+          resolve(stdout.trim());
+        }
       } else {
         reject(new Error(stderr.trim() || `claude exited with code ${code}`));
       }
@@ -588,6 +635,7 @@ function splitMessage(text: string, maxLen = 4000): string[] {
 
 console.log(`Claude Crew Agent: ${AGENT_NAME}`);
 console.log(`  Agent ID: ${AGENT_ID}`);
+console.log(`  Model: ${AGENT_MODEL}`);
 console.log(`  Agent dir: ${AGENT_DIR}`);
 console.log(`  Router: ${IS_ROUTER ? "YES" : "no"}`);
 console.log(`  Allowed users: ${ALLOWED_USERS.length ? ALLOWED_USERS.join(", ") : "all"}`);

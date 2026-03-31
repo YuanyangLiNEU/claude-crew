@@ -24,9 +24,10 @@ current_id=""
 current_dir=""
 current_token_env=""
 current_extra=""
+current_model=""
 
 start_agent() {
-  local name="$1" id="$2" dir="$3" token_env="$4" extra="$5"
+  local name="$1" id="$2" dir="$3" token_env="$4" extra="$5" model="$6"
   [ -z "$name" ] && return
 
   local token="${!token_env}"
@@ -43,6 +44,7 @@ start_agent() {
   AGENT_NAME="$name" \
   AGENT_ID="$id" \
   AGENT_DIR="$agent_dir" \
+  AGENT_MODEL="${model:-sonnet}" \
   EXTRA_DISALLOWED_TOOLS="$extra" \
   ROUTER_AGENT="${ROUTER_AGENT:-}" \
   CONFIG_PATH="$ROOT/agents.yaml" \
@@ -66,6 +68,11 @@ while IFS= read -r line; do
     "id:"*)        current_id="${line#*: }" ;;
     "dir:"*)       current_dir="${line#*: }" ;;
     "bot_token_env:"*) current_token_env="${line#*: }" ;;
+    "model:"*)
+      current_model="${line#*: }"
+      current_model="${current_model#\"}"
+      current_model="${current_model%\"}"
+      ;;
     "extra_disallowed:"*)
       current_extra="${line#*: }"
       current_extra="${current_extra#\"}"
@@ -76,8 +83,8 @@ while IFS= read -r line; do
         echo "Router: $current_name ($current_id)"
       fi
       # This is the last field per agent — start it
-      start_agent "$current_name" "$current_id" "$current_dir" "$current_token_env" "$current_extra"
-      current_name="" current_id="" current_dir="" current_token_env="" current_extra=""
+      start_agent "$current_name" "$current_id" "$current_dir" "$current_token_env" "$current_extra" "$current_model"
+      current_name="" current_id="" current_dir="" current_token_env="" current_extra="" current_model=""
       ;;
   esac
 done < "$ROOT/agents.yaml"

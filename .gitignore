@@ -5,4 +5,6 @@ dist/
 logs/
 agents/shared/inbox/
 agents/shared/group-history.jsonl
+agents/shared/costs.jsonl
 .DS_Store
+apps

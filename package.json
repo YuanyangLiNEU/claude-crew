@@ -8,7 +8,9 @@
     "start": "tsx src/index.ts",
     "start:all": "bash scripts/restart-all.sh",
     "stop": "bash scripts/stop-all.sh",
-    "status": "bash scripts/status.sh"
+    "status": "bash scripts/status.sh",
+    "costs": "bash scripts/costs.sh",
+    "costs:dashboard": "tsx scripts/costs-server.ts"
   },
   "dependencies": {
     "grammy": "^1.21.0",
