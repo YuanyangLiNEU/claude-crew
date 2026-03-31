@@ -251,12 +251,66 @@ The new agent is live. Message `@ember_qa_bot` in the group to test.
 - Node.js 18+
 - Telegram account
 
+## Cost & Session Management
+
+Each agent runs as a full Claude Code instance. Understanding how sessions and caching work is important for managing costs.
+
+### How `--continue` works
+
+By default, agents use `--continue` to maintain conversation memory across calls. Claude Code persists sessions at:
+
+```
+~/.claude/projects/-<path-encoded-agent-cwd>/
+```
+
+Every call appends to the session: user messages, assistant responses, tool calls, and tool results. This context is loaded on every subsequent call, so **session size grows unbounded** over time.
+
+### Token costs per call
+
+| Input | Tokens | Grows? |
+|-------|--------|--------|
+| Claude Code system prompt | ~5-8K | No |
+| Agent CLAUDE.md + shared profiles | ~3-5K | No |
+| Session history (`--continue`) | 10K → 100K+ | **Yes, unbounded** |
+| Group chat history (last 20 msgs) | ~1-3K | Capped |
+| Current message | ~50-200 | No |
+
+A chatty agent can easily reach 100K+ input tokens per call after a few conversations.
+
+### Prompt caching (and a known bug)
+
+Claude's API uses **prefix-based caching**: if the beginning of the input is identical to a recent call, those tokens are served from cache at ~90% discount. In theory, only the new message should cost full price on each call.
+
+**However**, there is a [known bug in Claude Code](https://github.com/anthropics/claude-code/issues/34629) where `--continue` (session resume) constructs the message array differently than the original session, breaking the cache prefix. This means **the entire session history is re-cached on every call** at the cache creation rate (25% more expensive than standard), instead of being read from cache.
+
+In practice, this means:
+- A 100K-token session costs ~$0.39/call on Sonnet (should be ~$0.04 with working cache)
+- The cost penalty grows as the session grows
+- The bug affects all `--continue` calls, not just long gaps between messages
+
+### Recommendations
+
+- **Wait for the fix** — the bug is tracked and assigned. Once patched, caching will work correctly and costs will drop ~10x automatically.
+- **Periodically reset sessions** — delete session files to prevent unbounded growth (see below).
+- **Monitor costs** — check your Anthropic dashboard or add cost tracking (parse `--output-format json` for `total_cost_usd` and `usage` fields).
+
+### Resetting sessions
+
+```bash
+# Find agent sessions
+ls ~/.claude/projects/ | grep claude-crew
+
+# Delete a specific agent's session to start fresh
+rm -rf ~/.claude/projects/-<encoded-path-to-agent-dir>/
+```
+
 ## Known Limitations
 
 - Agents process messages sequentially (one at a time per agent) — complex tasks block the queue
 - Cross-agent messaging uses file-based polling (1s interval) — not instant
 - `rm -rf` is the only hard-blocked command; other restrictions are policy-based (CLAUDE.md instructions)
 - Group chat history resets on file deletion (but session memory persists via `--continue`)
+- Session caching is broken on `--continue` ([#34629](https://github.com/anthropics/claude-code/issues/34629)) — each call pays full cache creation cost on the entire session history
 
 ## License
 
