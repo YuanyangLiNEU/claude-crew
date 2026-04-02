@@ -73,12 +73,32 @@ const HISTORY_FILE = path.join(SHARED_DIR, "group-history.jsonl");
 const MAX_HISTORY = 20;
 
 // ── Per-Agent Memory ────────────────────────────────────────
+//
+// Each agent call has ~17K tokens of fixed overhead:
+//   - Claude Code system prompt (static prefix):  ~11K tokens (cache read, cheap)
+//   - Claude Code dynamic sections (env, tools):   ~6K tokens (cache creation, paid every call)
+// On top of that, each call includes:
+//   - Group chat history (last 20 msgs):            ~1-3K tokens (capped)
+//   - Agent memory (memory.md):                     up to 8K tokens (capped below)
+//   - User message:                                 ~200 tokens
+// Total per call: ~20-25K tokens, leaving ~175K for actual tool use on Sonnet's 200K window.
+//
+// Memory sizing rationale:
+//   - memory.log stores tool actions only (not chat text — that's in group-history.jsonl)
+//   - One record ≈ 75 tokens for a medium investigation (~10 tool calls)
+//   - Compact trigger at 16KB (~4K tokens) = ~53 medium investigations or ~20 heavy refactors
+//   - memory.md capped at 32KB (~8K tokens) — enough for rich work history, small vs context window
+//   - Hard cap on memory.log at 32KB if compaction fails — prevents unbounded growth
+//   - Compaction uses Haiku (~$0.01/call) to summarize log into memory.md
+//
+// Reference: Claude Code's own SessionMemory caps at 12K tokens total with 2K per section.
+// We use 8K since we only store tool actions, not full conversation context.
 
 const MEMORY_FILE = path.join(AGENT_DIR, "memory.md");
 const MEMORY_LOG = path.join(AGENT_DIR, "memory.log");
-const COMPACT_EVERY_N = 8;
-const MAX_LOG_ENTRIES = 12;
-let callsSinceCompact = 0;
+const COMPACT_TRIGGER_BYTES = 16_000;   // ~4K tokens — trigger compaction
+const MEMORY_MD_CAP_BYTES = 32_000;     // ~8K tokens — max size of compacted summary
+const MEMORY_LOG_CAP_BYTES = 32_000;    // ~8K tokens — hard cap if compaction fails
 
 function readMemory(): string {
   const memory = tryReadFile(MEMORY_FILE).trim();
@@ -90,12 +110,12 @@ function readMemory(): string {
   const logRaw = tryReadFile(MEMORY_LOG).trim();
   if (!logRaw) return "";
 
-  const lines = logRaw.split("\n").slice(-COMPACT_EVERY_N);
+  const lines = logRaw.split("\n");
   const formatted = lines.map(l => {
     try {
       const e = JSON.parse(l);
-      return e.tools?.length ? `Tools: ${e.tools.join(", ")}` : "(no tool use)";
-    } catch { return ""; }
+      return e.tools?.length ? `Tools: ${e.tools.join(", ")}` : null;
+    } catch { return null; }
   }).filter(Boolean).join("\n");
 
   return formatted ? `[Recent actions — for context]\n${formatted}\n---\n` : "";
@@ -113,18 +133,18 @@ function tryReadFile(p: string): string {
   try { return fs.readFileSync(p, "utf-8"); } catch { return ""; }
 }
 
+function tryGetFileSize(p: string): number {
+  try { return fs.statSync(p).size; } catch { return 0; }
+}
+
 async function compactMemoryIfNeeded(): Promise<void> {
-  callsSinceCompact++;
-  if (callsSinceCompact < COMPACT_EVERY_N) return;
+  const logSize = tryGetFileSize(MEMORY_LOG);
+  if (logSize < COMPACT_TRIGGER_BYTES) return;
 
   const logRaw = tryReadFile(MEMORY_LOG).trim();
   if (!logRaw) return;
 
   const lines = logRaw.split("\n");
-  // Not enough to compact yet
-  if (lines.length < COMPACT_EVERY_N) return;
-
-  callsSinceCompact = 0;
   const existingMemory = tryReadFile(MEMORY_FILE).trim();
 
   const prompt = `You are summarizing an AI agent's recent work for future context. Be concise but preserve important details.
@@ -144,25 +164,34 @@ Write an updated memory summary that merges the existing memory with recent tool
 3. Patterns: what the agent has been working on
 4. Pending work or open questions
 
-Keep it under 800 words. Write in past tense. No preamble — start directly with the summary.`;
+Keep it under 1500 words. Write in past tense. No preamble — start directly with the summary.`;
 
   try {
-    console.log(`  [MEMORY] Compacting memory for ${AGENT_NAME}...`);
+    console.log(`  [MEMORY] Compacting memory for ${AGENT_NAME} (log: ${(logSize / 1024).toFixed(1)}KB)...`);
     const summary = await callClaudeRaw(prompt, AGENT_DIR, "haiku");
     if (summary.trim()) {
-      fs.writeFileSync(MEMORY_FILE, summary.trim() + "\n");
+      // Cap memory.md — keep the tail (most recent work) if over limit
+      let finalMemory = summary.trim();
+      if (finalMemory.length > MEMORY_MD_CAP_BYTES) {
+        finalMemory = finalMemory.slice(-MEMORY_MD_CAP_BYTES);
+      }
+      fs.writeFileSync(MEMORY_FILE, finalMemory + "\n");
+
       // Only clear the lines we actually summarized — new entries may have arrived
       const currentLog = tryReadFile(MEMORY_LOG).trim();
       const currentLines = currentLog ? currentLog.split("\n") : [];
       const remaining = currentLines.slice(lines.length);
       fs.writeFileSync(MEMORY_LOG, remaining.length ? remaining.join("\n") + "\n" : "");
-      console.log(`  [MEMORY] Compacted (${summary.length} chars)`);
+      console.log(`  [MEMORY] Compacted → memory.md: ${(finalMemory.length / 1024).toFixed(1)}KB`);
     }
   } catch (err: any) {
     console.error(`  [MEMORY] Compaction failed:`, err.message);
-    // Trim log to prevent unbounded growth even if compaction fails
-    if (lines.length > MAX_LOG_ENTRIES) {
-      fs.writeFileSync(MEMORY_LOG, lines.slice(-MAX_LOG_ENTRIES).join("\n") + "\n");
+    // Hard cap: trim log to prevent unbounded growth if compaction keeps failing
+    if (logSize > MEMORY_LOG_CAP_BYTES) {
+      const trimmed = logRaw.slice(-MEMORY_LOG_CAP_BYTES);
+      const firstNewline = trimmed.indexOf("\n");
+      fs.writeFileSync(MEMORY_LOG, firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed);
+      console.log(`  [MEMORY] Log trimmed to ${(MEMORY_LOG_CAP_BYTES / 1024).toFixed(0)}KB`);
     }
   }
 }

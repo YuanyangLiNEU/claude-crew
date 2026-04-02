@@ -292,24 +292,37 @@ Each agent runs as a full Claude Code instance with bounded context per call.
 
 Instead of using `--continue` (which accumulates unbounded session history), each agent maintains its own memory:
 
-1. **Every call**: tool actions (file reads, edits, bash commands, searches) are extracted from Claude's verbose output and appended to `memory.log`
-2. **Every 8 calls**: a Haiku summarization call compacts `memory.log` into `memory.md`
+1. **Every call**: tool actions (file reads, edits, bash commands, searches) are extracted from Claude's `--verbose` output and appended to `memory.log`
+2. **When `memory.log` reaches ~16KB** (~4K tokens): a Haiku summarization call compacts it into `memory.md`
 3. **On each call**: `memory.md` (or raw `memory.log` if no compaction yet) is injected into the prompt
-4. **Chat responses** are already captured in the shared `group-history.jsonl` — no need to duplicate them in memory
+4. **Chat responses** are already in `group-history.jsonl` — memory only tracks tool actions (what the agent *did*, not what it *said*)
 
-This keeps context bounded while preserving awareness of what the agent actually did (not just what it said).
+Compaction is size-based, not count-based. Light conversations (few tools) may go 50+ calls before compacting. Heavy refactors (30+ tools per call) compact after 5-6 calls.
 
-### Token costs per call
+### Token cost breakdown per call
 
-| Input | Tokens | Grows? |
-|-------|--------|--------|
-| Claude Code system prompt | ~5-8K | No |
-| Agent CLAUDE.md + shared profiles | ~3-5K | No |
-| Agent memory (`memory.md`) | ~1-2K | Capped by compaction |
-| Group chat history (last 20 msgs) | ~1-3K | Capped |
-| Current message | ~50-200 | No |
+Each agent call has ~17K tokens of fixed overhead from Claude Code itself:
 
-Total: **~6-10K tokens per call** (bounded), plus a ~$0.01 Haiku compaction call every 8 exchanges.
+| Component | Tokens | Cache | Notes |
+|-----------|--------|-------|-------|
+| Claude Code system prompt | ~11K | Read (90% discount) | Static prefix — identity, tools, style |
+| Claude Code dynamic sections | ~6K | Creation (25% premium) | Env info, session guidance, CLAUDE.md — rebuilt every call by design |
+| Group chat history (last 20 msgs) | ~1-3K | — | Capped |
+| Agent memory (`memory.md`) | up to 8K | — | Capped at 32KB |
+| User message | ~200 | — | Negligible |
+
+Total per call: **~20-25K tokens** (bounded), leaving ~175K of Sonnet's 200K window for actual tool use.
+
+### Memory sizing
+
+| Setting | Value | Rationale |
+|---------|-------|-----------|
+| `memory.log` compaction trigger | 16KB (~4K tokens) | ~53 medium investigations or ~20 heavy refactors |
+| `memory.md` cap | 32KB (~8K tokens) | Rich work history; small vs 200K context window |
+| `memory.log` hard cap | 32KB (~8K tokens) | Safety net if compaction fails repeatedly |
+| Compaction model | Haiku (~$0.01/call) | Summarization doesn't need a frontier model |
+
+Reference: Claude Code's own Session Memory caps at 12K tokens total with 2K per section. We use 8K since we only store tool actions, not full conversation.
 
 ### Monitoring costs
 
