@@ -6,5 +6,7 @@ logs/
 agents/shared/inbox/
 agents/shared/group-history.jsonl
 agents/shared/costs.jsonl
+agents/*/memory.md
+agents/*/memory.log
 .DS_Store
 apps
