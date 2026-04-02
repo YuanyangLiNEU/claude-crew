@@ -260,20 +260,26 @@ bot.on("message:text", (ctx) => {
     return;
   }
 
+  // Access control — check BEFORE logging to history so unauthorized users
+  // don't influence routing context
+  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(userId)) {
+    return;
+  }
+
   // Log human group messages to history (router agent only)
   if (isGroup && IS_ROUTER) {
     appendHistory(fromName, ctx.message.text);
-  }
-
-  // Access control
-  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(userId)) {
-    return;
   }
 
   // Check if directly tagged
   const textLower = ctx.message.text.toLowerCase();
   const directlyTagged = isGroup && botUsername && textLower.includes(`@${botUsername.toLowerCase()}`);
   const repliedTo = isGroup && ctx.message.reply_to_message?.from?.id === bot.botInfo.id;
+
+  // Check if message targets a DIFFERENT bot (any @bot_username that isn't ours)
+  const targetsAnotherBot = isGroup && Object.values(agentMentions).some(mentions =>
+    mentions.some(m => textLower.includes(m.toLowerCase()))
+  ) && !directlyTagged;
 
   // Strip bot @mention from message
   let text = ctx.message.text;
@@ -285,8 +291,9 @@ bot.on("message:text", (ctx) => {
     // DM or directly tagged — this agent must respond
     queue.push({ chatId: ctx.chat.id, text, fromUser: fromName, isGroup, mustRespond: true });
     drain();
-  } else if (IS_ROUTER) {
+  } else if (IS_ROUTER && !targetsAnotherBot) {
     // Non-tagged group message — schedule the routing layer
+    // Skip if another bot is explicitly @mentioned (that bot handles it directly)
     scheduleLayerCheck(ctx.chat.id);
   }
 });
