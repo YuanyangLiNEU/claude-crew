@@ -384,13 +384,11 @@ ${recentMessages}
 
 Rules:
 - Reply with ONLY agent IDs (comma-separated), e.g. "engineer_devin" or "pm_sage,ux_aria"
-- Reply "NONE" if:
-  - The conversation is resolved or just casual chat
-  - It's a general question anyone could answer (let humans handle it)
-  - Someone already answered adequately
-- Only route when a message clearly needs a SPECIFIC role's expertise
-- Prefer routing to ONE agent. Route to multiple only when genuinely different expertise is needed
-- When in doubt, reply "NONE" — it's better to not route than to over-route`;
+- Reply "NONE" if the conversation is resolved or someone already answered adequately
+- If the message addresses "everyone" or the whole team, route to ALL agents
+- If the message asks a specific role by name (e.g. "Sage"), route to that agent
+- Route to multiple agents when genuinely different expertise is needed
+- When in doubt, route — it's better to give agents a chance to respond than to miss a message`;
 
   console.log(`  [ROUTER] Evaluating conversation (sonnet)...`);
 
@@ -401,6 +399,7 @@ Rules:
       timeoutMs: 30_000,
     });
     const lower = response.toLowerCase();
+    console.log(`  [ROUTER] Raw: ${response.replace(/\n/g, " ").slice(0, 120)}`);
 
     const firstWord = lower.split(/[\s,]/)[0];
     if (!lower || firstWord === "none") {
@@ -584,6 +583,12 @@ function logCost(agent: string, type: string, cost: number, usage: any, message:
 
 // ── Claude Code CLI ─────────────────────────────────────────
 
+// Env for spawned Claude processes — strip bot token so Claude's Telegram MCP plugin
+// doesn't start a competing getUpdates poll with the same token.
+const claudeEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([k]) => k !== "TELEGRAM_BOT_TOKEN")
+);
+
 /** Light Claude call — no session persistence. Used for compaction and routing. */
 function callClaudeRaw(
   message: string,
@@ -598,13 +603,14 @@ function callClaudeRaw(
       "--output-format", "json",
       "--dangerously-skip-permissions",
       "--no-session-persistence",
+      "--strict-mcp-config",
       "--",
       message,
     ];
 
     const proc = spawn(CLAUDE_PATH, args, {
       cwd,
-      env: process.env,
+      env: claudeEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -665,7 +671,7 @@ function callClaude(message: string, cwd: string, rawMessage?: string): Promise<
 
     const proc = spawn(CLAUDE_PATH, args, {
       cwd,
-      env: process.env,
+      env: claudeEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -768,6 +774,8 @@ console.log(`  Allowed users: ${ALLOWED_USERS.length ? ALLOWED_USERS.join(", ") 
 console.log("");
 
 await bot.api.deleteWebhook({ drop_pending_updates: true });
+// Flush any stale long-poll from a previous process (Telegram holds it for up to 30s)
+await bot.api.raw.getUpdates({ offset: -1, limit: 1, timeout: 0 }).catch(() => {});
 
 const me = await bot.api.getMe();
 botUsername = me.username || "";
