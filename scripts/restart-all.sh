@@ -36,6 +36,12 @@ start_agent() {
     return
   fi
 
+  # First agent that actually starts becomes the router
+  if [ -z "$ROUTER_AGENT" ]; then
+    ROUTER_AGENT="$id"
+    echo "Router: $name ($id)"
+  fi
+
   local agent_dir="$ROOT/$dir"
   echo "Starting $name ($id)..."
 
@@ -77,11 +83,6 @@ while IFS= read -r line; do
       current_extra="${line#*: }"
       current_extra="${current_extra#\"}"
       current_extra="${current_extra%\"}"
-      # First agent becomes the router
-      if [ -z "$ROUTER_AGENT" ]; then
-        ROUTER_AGENT="$current_id"
-        echo "Router: $current_name ($current_id)"
-      fi
       # This is the last field per agent — start it
       start_agent "$current_name" "$current_id" "$current_dir" "$current_token_env" "$current_extra" "$current_model"
       current_name="" current_id="" current_dir="" current_token_env="" current_extra="" current_model=""
