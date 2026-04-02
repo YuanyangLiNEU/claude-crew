@@ -348,7 +348,7 @@ rm agents/engineer_devin/memory.md agents/engineer_devin/memory.log
 
 ## Known Limitations
 
-- Agents process messages sequentially (one at a time per agent) — complex tasks block the queue
+- **Sequential message processing** — each agent handles one message at a time. A long task (2+ min debugging session) blocks all queued messages for that agent. A future improvement could add priority lanes (fast questions skip the queue) or parallel processing, but this requires handling concurrent Claude processes, shared state (history, memory files), and Telegram message ordering
 - Cross-agent messaging uses file-based polling (1s interval) — not instant
 - `rm -rf` is the only hard-blocked command; other restrictions are policy-based (CLAUDE.md instructions)
 - DM conversations don't have group history context — only agent memory
