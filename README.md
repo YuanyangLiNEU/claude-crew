@@ -20,7 +20,7 @@ Most multi-agent frameworks (AutoGen, CrewAI, LangGraph) give you a Python SDK. 
 | **Permissions** | Per-role tool restrictions (PM can't edit code, UX can't read files) | All agents have the same access |
 | **Model per agent** | Configure per-agent (opus for engineers, sonnet for PM) | Usually one model for all |
 | **Cost tracking** | Built-in: CLI summary + web dashboard with cache token breakdown | In-memory dicts (AutoGen) or nothing |
-| **Memory** | Session continuity via `--continue` + shared group history | Varies — often none across runs |
+| **Memory** | Per-agent compacted memory + shared group history | Varies — often none across runs |
 | **Setup** | `agents.yaml` + CLAUDE.md files | Python code |
 
 > **Note:** Claude Code has a built-in [Telegram channel plugin](https://github.com/anthropics/claude-code/issues/36477), but it stops processing messages after the first response. Claude Crew bypasses this entirely with a reliable coordinator architecture.
@@ -54,8 +54,8 @@ Every API call is logged with full token breakdown (cache read, cache write, new
 ### Agent collaboration
 Agents @mention each other in responses and messages route automatically via a shared inbox. Devin can tag Aria for design review; Sage can ask Lark for a feasibility check.
 
-### Session memory
-Agents remember prior conversations across calls via `--continue`. Ask Devin to fix a bug, come back an hour later and say "what about the tests?" — he knows what you're talking about.
+### Agent memory
+Each agent maintains a compacted work log (`memory.md`) in its own directory. After every 8 exchanges, a cheap Haiku call summarizes recent work into a rolling memory file. This gives agents long-term continuity without unbounded session growth — no stale tool outputs accumulating across calls.
 
 ### Everything else
 - **Group chat context** — all agents see the last 20 messages
@@ -119,7 +119,9 @@ In the Telegram group, @mention a bot directly, or just send a message — the s
 ### Tagged messages (direct)
 ```
 "@engineer_devin fix the login bug"
-  → Goes directly to Devin's process → claude -p --continue → responds
+  → Goes directly to Devin's process
+  → Prompt: [agent memory] + [group history] + message
+  → claude -p --model sonnet → responds
 ```
 
 ### Non-tagged messages (smart routing)
@@ -182,10 +184,13 @@ claude-crew/
     costs.sh               # CLI cost summary
     costs-server.ts        # Web cost dashboard
   agents/
-    engineer_devin/CLAUDE.md  # Devin's role
-    engineer_lark/CLAUDE.md   # Lark's role
-    pm_sage/CLAUDE.md         # Sage's role
-    ux_aria/CLAUDE.md         # Aria's role
+    engineer_devin/
+      CLAUDE.md            # Devin's role
+      memory.md            # Compacted work history (auto-generated)
+      memory.log           # Raw exchanges since last compaction
+    engineer_lark/         # Same structure
+    pm_sage/               # Same structure
+    ux_aria/               # Same structure
     shared/
       team-base.md         # Shared team profile
       engineer-base.md     # Shared engineer profile
@@ -279,19 +284,19 @@ The new agent is live. Message `@ember_qa_bot` in the group to test.
 - Node.js 18+
 - Telegram account
 
-## Cost & Session Management
+## Cost & Memory Management
 
-Each agent runs as a full Claude Code instance. Understanding how sessions and caching work is important for managing costs.
+Each agent runs as a full Claude Code instance with bounded context per call.
 
-### How `--continue` works
+### How agent memory works
 
-By default, agents use `--continue` to maintain conversation memory across calls. Claude Code persists sessions at:
+Instead of using `--continue` (which accumulates unbounded session history), each agent maintains its own memory:
 
-```
-~/.claude/projects/-<path-encoded-agent-cwd>/
-```
+1. **Every call**: the exchange (user message + agent response) is appended to `memory.log`
+2. **Every 8 calls**: a Haiku summarization call compacts `memory.log` into `memory.md`
+3. **On each call**: `memory.md` (or raw `memory.log` if no compaction yet) is injected into the prompt
 
-Every call appends to the session: user messages, assistant responses, tool calls, and tool results. This context is loaded on every subsequent call, so **session size grows unbounded** over time.
+This keeps context bounded while preserving long-term continuity.
 
 ### Token costs per call
 
@@ -299,42 +304,19 @@ Every call appends to the session: user messages, assistant responses, tool call
 |-------|--------|--------|
 | Claude Code system prompt | ~5-8K | No |
 | Agent CLAUDE.md + shared profiles | ~3-5K | No |
-| Session history (`--continue`) | 10K → 100K+ | **Yes, unbounded** |
+| Agent memory (`memory.md`) | ~1-2K | Capped by compaction |
 | Group chat history (last 20 msgs) | ~1-3K | Capped |
 | Current message | ~50-200 | No |
 
-A chatty agent can easily reach 100K+ input tokens per call after a few conversations.
-
-### Prompt caching (and a known bug)
-
-Claude's API uses **prefix-based caching**: if the beginning of the input is identical to a recent call, those tokens are served from cache at ~90% discount. In theory, only the new message should cost full price on each call.
-
-**However**, there is a [known bug in Claude Code](https://github.com/anthropics/claude-code/issues/34629) where `--continue` (session resume) constructs the message array differently than the original session, breaking the cache prefix. This means **the entire session history is re-cached on every call** at the cache creation rate (25% more expensive than standard), instead of being read from cache.
-
-In practice, this means:
-- A 100K-token session costs ~$0.39/call on Sonnet (should be ~$0.04 with working cache)
-- The cost penalty grows as the session grows
-- The bug affects all `--continue` calls, not just long gaps between messages
+Total: **~6-10K tokens per call** (bounded), plus a ~$0.01 Haiku compaction call every 8 exchanges.
 
 ### Monitoring costs
 
-Every API call (both agent and router) is automatically logged to `agents/shared/costs.jsonl` with full token breakdown.
+Every API call (agent, router, and compaction) is logged to `agents/shared/costs.jsonl` with full token breakdown.
 
 **CLI summary:**
 ```bash
 npm run costs
-```
-```
-Devin:
-  $0.3947   112,287 in /   677 out  Fix "Also Today" staleness — tell Gemini...
-  $0.0312    10,588 in /   296 out  What's the status of the login bug?
-  Total: $0.4259 (2 calls)
-
-Router:
-  $0.0304  What should we build next?
-  Total: $0.0304 (1 calls)
-
-Grand total: $0.4563 (3 calls)
 ```
 
 **Web dashboard:**
@@ -343,20 +325,11 @@ npm run costs:dashboard    # opens http://localhost:3100
 ```
 Shows summary cards (grand total, agent vs router costs, call count) and per-agent tables with time, model, message, token breakdown (cache read + cache create + new), output tokens, and cost.
 
-### Recommendations
-
-- **Wait for the fix** — the bug is tracked and assigned. Once patched, caching will work correctly and costs will drop ~10x automatically.
-- **Periodically reset sessions** — delete session files to prevent unbounded growth (see below).
-- **Monitor costs** — use `npm run costs` or `npm run costs:dashboard` to track spending.
-
-### Resetting sessions
+### Resetting agent memory
 
 ```bash
-# Find agent sessions
-ls ~/.claude/projects/ | grep claude-crew
-
-# Delete a specific agent's session to start fresh
-rm -rf ~/.claude/projects/-<encoded-path-to-agent-dir>/
+# Clear a specific agent's memory
+rm agents/engineer_devin/memory.md agents/engineer_devin/memory.log
 ```
 
 ## Known Limitations
@@ -364,8 +337,8 @@ rm -rf ~/.claude/projects/-<encoded-path-to-agent-dir>/
 - Agents process messages sequentially (one at a time per agent) — complex tasks block the queue
 - Cross-agent messaging uses file-based polling (1s interval) — not instant
 - `rm -rf` is the only hard-blocked command; other restrictions are policy-based (CLAUDE.md instructions)
-- Group chat history resets on file deletion (but session memory persists via `--continue`)
-- Session caching is broken on `--continue` ([#34629](https://github.com/anthropics/claude-code/issues/34629)) — each call pays full cache creation cost on the entire session history
+- DM conversations don't have group history context — only agent memory
+- Agent memory is a summary, not a full transcript — agents may need to re-read files for exact details
 
 ## License
 

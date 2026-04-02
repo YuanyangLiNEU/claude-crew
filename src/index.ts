@@ -72,6 +72,104 @@ const INBOX_DIR = path.join(SHARED_DIR, "inbox");
 const HISTORY_FILE = path.join(SHARED_DIR, "group-history.jsonl");
 const MAX_HISTORY = 20;
 
+// ── Per-Agent Memory ────────────────────────────────────────
+
+const MEMORY_FILE = path.join(AGENT_DIR, "memory.md");
+const MEMORY_LOG = path.join(AGENT_DIR, "memory.log");
+const COMPACT_EVERY_N = 8;
+const MAX_LOG_ENTRIES = 12;
+let callsSinceCompact = 0;
+
+function readMemory(): string {
+  const memory = tryReadFile(MEMORY_FILE).trim();
+  if (memory) {
+    return `[Your prior work — use as context, re-read files if you need current contents]\n${memory}\n---\n`;
+  }
+
+  // No compacted memory yet — fall back to raw log for early conversations
+  const logRaw = tryReadFile(MEMORY_LOG).trim();
+  if (!logRaw) return "";
+
+  const lines = logRaw.split("\n").slice(-COMPACT_EVERY_N);
+  const formatted = lines.map(l => {
+    try {
+      const e = JSON.parse(l);
+      return `User: ${e.user}\nAgent: ${e.agent}`;
+    } catch { return ""; }
+  }).filter(Boolean).join("\n\n");
+
+  return formatted ? `[Recent exchanges — for context]\n${formatted}\n---\n` : "";
+}
+
+function appendToMemoryLog(userMsg: string, agentResponse: string) {
+  const entry = {
+    ts: Date.now(),
+    user: userMsg.slice(0, 500),
+    agent: agentResponse.slice(0, 1000),
+  };
+  try {
+    fs.writeFileSync(MEMORY_LOG, (tryReadFile(MEMORY_LOG) || "") + JSON.stringify(entry) + "\n");
+  } catch {}
+}
+
+function tryReadFile(p: string): string {
+  try { return fs.readFileSync(p, "utf-8"); } catch { return ""; }
+}
+
+async function compactMemoryIfNeeded(): Promise<void> {
+  callsSinceCompact++;
+  if (callsSinceCompact < COMPACT_EVERY_N) return;
+
+  const logRaw = tryReadFile(MEMORY_LOG).trim();
+  if (!logRaw) return;
+
+  const lines = logRaw.split("\n");
+  // Not enough to compact yet
+  if (lines.length < COMPACT_EVERY_N) return;
+
+  callsSinceCompact = 0;
+  const existingMemory = tryReadFile(MEMORY_FILE).trim();
+
+  const prompt = `You are summarizing an AI agent's recent work for future context. Be concise but preserve important details.
+
+${existingMemory ? `## Existing memory\n${existingMemory}\n` : ""}
+## Recent exchanges (oldest first)
+${lines.map(l => {
+    try {
+      const e = JSON.parse(l);
+      return `User: ${e.user}\nAgent: ${e.agent}`;
+    } catch { return ""; }
+  }).filter(Boolean).join("\n\n")}
+
+Write an updated memory summary that merges the existing memory with recent work. Include:
+1. What was done and why
+2. Key files changed or reviewed
+3. Errors hit and how they were resolved
+4. Pending work or open questions
+
+Keep it under 800 words. Write in past tense. No preamble — start directly with the summary.`;
+
+  try {
+    console.log(`  [MEMORY] Compacting memory for ${AGENT_NAME}...`);
+    const summary = await callClaudeRaw(prompt, AGENT_DIR, "haiku");
+    if (summary.trim()) {
+      fs.writeFileSync(MEMORY_FILE, summary.trim() + "\n");
+      // Only clear the lines we actually summarized — new entries may have arrived
+      const currentLog = tryReadFile(MEMORY_LOG).trim();
+      const currentLines = currentLog ? currentLog.split("\n") : [];
+      const remaining = currentLines.slice(lines.length);
+      fs.writeFileSync(MEMORY_LOG, remaining.length ? remaining.join("\n") + "\n" : "");
+      console.log(`  [MEMORY] Compacted (${summary.length} chars)`);
+    }
+  } catch (err: any) {
+    console.error(`  [MEMORY] Compaction failed:`, err.message);
+    // Trim log to prevent unbounded growth even if compaction fails
+    if (lines.length > MAX_LOG_ENTRIES) {
+      fs.writeFileSync(MEMORY_LOG, lines.slice(-MAX_LOG_ENTRIES).join("\n") + "\n");
+    }
+  }
+}
+
 // ── Group Chat History ──────────────────────────────────────
 
 interface HistoryEntry {
@@ -275,9 +373,8 @@ async function runLayer() {
   }
 }
 
-function evaluateConversation(recentMessages: string): Promise<string[]> {
-  return new Promise((resolve) => {
-    const prompt = `You are a team coordinator. The team is led by ${founderName}. Read this recent group chat and decide if any team member needs to respond.
+async function evaluateConversation(recentMessages: string): Promise<string[]> {
+  const prompt = `You are a team coordinator. The team is led by ${founderName}. Read this recent group chat and decide if any team member needs to respond.
 
 Team members:
 ${agentDescriptions}
@@ -295,68 +392,33 @@ Rules:
 - Prefer routing to ONE agent. Route to multiple only when genuinely different expertise is needed
 - When in doubt, reply "NONE" — it's better to not route than to over-route`;
 
-    const args = [
-      "-p",
-      "--model", "sonnet",
-      "--output-format", "json",
-      "--dangerously-skip-permissions",
-      "--strict-mcp-config",
-      "--no-session-persistence",
-      "--",
-      prompt,
-    ];
+  console.log(`  [ROUTER] Evaluating conversation (sonnet)...`);
 
-    console.log(`  [ROUTER] Evaluating conversation (sonnet)...`);
-
-    const proc = spawn(CLAUDE_PATH, args, {
-      cwd: AGENT_DIR,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+  try {
+    const response = await callClaudeRaw(prompt, AGENT_DIR, "sonnet", {
+      costType: "router",
+      costLabel: recentMessages.split("\n").pop() || "",
+      timeoutMs: 30_000,
     });
+    const lower = response.toLowerCase();
 
-    let stdout = "";
-    proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+    const firstWord = lower.split(/[\s,]/)[0];
+    if (!lower || firstWord === "none") {
+      console.log(`  [ROUTER] Decision: NONE`);
+      return [];
+    }
 
-    const timer = setTimeout(() => {
-      proc.kill("SIGTERM");
-      resolve([]);
-    }, 30_000);
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-
-      let response = "";
-      try {
-        const json = JSON.parse(stdout.trim());
-        response = (json.result || "").toLowerCase();
-        const cost = json.total_cost_usd || 0;
-        const model = Object.keys(json.modelUsage || {})[0] || "unknown";
-        console.log(`  [ROUTER] Cost: $${cost.toFixed(4)} | ${model}`);
-        logCost(AGENT_NAME, "router", cost, json.usage || {}, recentMessages.split("\n").pop() || "", model);
-      } catch {
-        response = stdout.trim().toLowerCase();
-      }
-
-      const firstWord = response.split(/[\s,]/)[0];
-      if (code !== 0 || !response || firstWord === "none") {
-        resolve([]);
-        return;
-      }
-      // Extract valid agent IDs using word boundary matching
-      const validIds = Object.keys(agentMentions);
-      const matched = validIds.filter(id => {
-        const regex = new RegExp(`\\b${id.replace(/_/g, "[_ ]")}\\b`);
-        return regex.test(response);
-      });
-      console.log(`  [ROUTER] Decision: ${matched.join(", ") || "NONE"}`);
-      resolve(matched);
+    const validIds = Object.keys(agentMentions);
+    const matched = validIds.filter(id => {
+      const regex = new RegExp(`\\b${id.replace(/_/g, "[_ ]")}\\b`);
+      return regex.test(lower);
     });
-
-    proc.on("error", () => {
-      clearTimeout(timer);
-      resolve([]);
-    });
-  });
+    console.log(`  [ROUTER] Decision: ${matched.join(", ") || "NONE"}`);
+    return matched;
+  } catch (err: any) {
+    console.error(`  [ROUTER] Evaluation failed:`, err.message);
+    return [];
+  }
 }
 
 // ── Queue Processor ─────────────────────────────────────────
@@ -381,13 +443,18 @@ async function drain() {
   bot.api.sendChatAction(msg.chatId, "typing").catch(() => {});
 
   try {
+    const memory = readMemory();
     const history = msg.isGroup ? getRecentHistory() : "";
     const prompt = msg.fromAgent
-      ? `${history}[Message from ${msg.fromAgent} in the team chat]\n${msg.text}`
-      : `${history}${msg.fromUser}: ${msg.text}`;
+      ? `${memory}${history}[Message from ${msg.fromAgent} in the team chat]\n${msg.text}`
+      : `${memory}${history}${msg.fromUser}: ${msg.text}`;
 
     const response = await callClaude(prompt, AGENT_DIR, msg.text);
     clearInterval(typingInterval);
+
+    // Log exchange and compact memory if needed
+    appendToMemoryLog(msg.text, response);
+    compactMemoryIfNeeded().catch(() => {});
 
     // If agent has nothing to say on a non-mandatory message, stay silent
     if (!response.trim() || (!msg.mustRespond && /^(SKIP|PASS|N\/A|nothing to add)/i.test(response.trim()))) {
@@ -517,23 +584,84 @@ function logCost(agent: string, type: string, cost: number, usage: any, message:
 
 // ── Claude Code CLI ─────────────────────────────────────────
 
+/** Light Claude call — no session persistence. Used for compaction and routing. */
+function callClaudeRaw(
+  message: string,
+  cwd: string,
+  model: string = AGENT_MODEL,
+  opts: { costType?: string; costLabel?: string; timeoutMs?: number } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-p",
+      "--model", model,
+      "--output-format", "json",
+      "--dangerously-skip-permissions",
+      "--no-session-persistence",
+      "--",
+      message,
+    ];
+
+    const proc = spawn(CLAUDE_PATH, args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    const timer = opts.timeoutMs
+      ? setTimeout(() => { killed = true; proc.kill("SIGTERM"); }, opts.timeoutMs)
+      : null;
+
+    proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+    proc.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (killed) { resolve(""); return; }
+
+      if (code === 0) {
+        try {
+          const json = JSON.parse(stdout.trim());
+          if (opts.costType) {
+            const cost = json.total_cost_usd || 0;
+            const m = Object.keys(json.modelUsage || {})[0] || "unknown";
+            logCost(AGENT_NAME, opts.costType, cost, json.usage || {}, opts.costLabel || "", m);
+          }
+          resolve(json.result || "");
+        } catch {
+          resolve(stdout.trim());
+        }
+      } else {
+        reject(new Error(stderr.trim() || `claude exited with code ${code}`));
+      }
+    });
+
+    proc.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
 function callClaude(message: string, cwd: string, rawMessage?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const disallowed = ["Bash(rm -rf *)", ...EXTRA_DISALLOWED];
 
     const args = [
       "-p",
-      "--continue",
       "--model", AGENT_MODEL,
       "--output-format", "json",
       "--dangerously-skip-permissions",
-      "--strict-mcp-config",
       ...(disallowed.length ? ["--disallowedTools", ...disallowed] : []),
       "--",
       message,
     ];
 
-    console.log(`  → claude -p --continue (cwd: ${path.basename(cwd)})`);
+    console.log(`  → claude -p (cwd: ${path.basename(cwd)})`);
 
     const proc = spawn(CLAUDE_PATH, args, {
       cwd,
@@ -564,9 +692,7 @@ function callClaude(message: string, cwd: string, rawMessage?: string): Promise<
       }
     });
 
-    proc.on("error", (err) => {
-      reject(err);
-    });
+    proc.on("error", reject);
   });
 }
 
