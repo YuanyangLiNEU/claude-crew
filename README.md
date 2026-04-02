@@ -55,7 +55,7 @@ Every API call is logged with full token breakdown (cache read, cache write, new
 Agents @mention each other in responses and messages route automatically via a shared inbox. Devin can tag Aria for design review; Sage can ask Lark for a feasibility check.
 
 ### Agent memory
-Each agent maintains a compacted work log (`memory.md`) in its own directory. After every 8 exchanges, a cheap Haiku call summarizes recent work into a rolling memory file. This gives agents long-term continuity without unbounded session growth — no stale tool outputs accumulating across calls.
+Each agent tracks its tool actions (file reads, edits, bash commands, searches) in `memory.log`. Every 8 calls, a cheap Haiku call compacts these into a rolling summary (`memory.md`). This gives agents long-term awareness of what they've done — which files they changed, what commands they ran — without unbounded session growth.
 
 ### Everything else
 - **Group chat context** — all agents see the last 20 messages
@@ -292,11 +292,12 @@ Each agent runs as a full Claude Code instance with bounded context per call.
 
 Instead of using `--continue` (which accumulates unbounded session history), each agent maintains its own memory:
 
-1. **Every call**: the exchange (user message + agent response) is appended to `memory.log`
+1. **Every call**: tool actions (file reads, edits, bash commands, searches) are extracted from Claude's verbose output and appended to `memory.log`
 2. **Every 8 calls**: a Haiku summarization call compacts `memory.log` into `memory.md`
 3. **On each call**: `memory.md` (or raw `memory.log` if no compaction yet) is injected into the prompt
+4. **Chat responses** are already captured in the shared `group-history.jsonl` — no need to duplicate them in memory
 
-This keeps context bounded while preserving long-term continuity.
+This keeps context bounded while preserving awareness of what the agent actually did (not just what it said).
 
 ### Token costs per call
 

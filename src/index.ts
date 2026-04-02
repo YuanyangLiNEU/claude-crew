@@ -94,19 +94,16 @@ function readMemory(): string {
   const formatted = lines.map(l => {
     try {
       const e = JSON.parse(l);
-      return `User: ${e.user}\nAgent: ${e.agent}`;
+      return e.tools?.length ? `Tools: ${e.tools.join(", ")}` : "(no tool use)";
     } catch { return ""; }
-  }).filter(Boolean).join("\n\n");
+  }).filter(Boolean).join("\n");
 
-  return formatted ? `[Recent exchanges — for context]\n${formatted}\n---\n` : "";
+  return formatted ? `[Recent actions — for context]\n${formatted}\n---\n` : "";
 }
 
-function appendToMemoryLog(userMsg: string, agentResponse: string) {
-  const entry = {
-    ts: Date.now(),
-    user: userMsg.slice(0, 500),
-    agent: agentResponse.slice(0, 1000),
-  };
+function appendToMemoryLog(tools: string[]) {
+  if (tools.length === 0) return;
+  const entry = { ts: Date.now(), tools };
   try {
     fs.writeFileSync(MEMORY_LOG, (tryReadFile(MEMORY_LOG) || "") + JSON.stringify(entry) + "\n");
   } catch {}
@@ -133,18 +130,18 @@ async function compactMemoryIfNeeded(): Promise<void> {
   const prompt = `You are summarizing an AI agent's recent work for future context. Be concise but preserve important details.
 
 ${existingMemory ? `## Existing memory\n${existingMemory}\n` : ""}
-## Recent exchanges (oldest first)
+## Recent tool actions (oldest first)
 ${lines.map(l => {
     try {
       const e = JSON.parse(l);
-      return `User: ${e.user}\nAgent: ${e.agent}`;
-    } catch { return ""; }
-  }).filter(Boolean).join("\n\n")}
+      return e.tools?.length ? `- ${e.tools.join(", ")}` : null;
+    } catch { return null; }
+  }).filter(Boolean).join("\n")}
 
-Write an updated memory summary that merges the existing memory with recent work. Include:
-1. What was done and why
-2. Key files changed or reviewed
-3. Errors hit and how they were resolved
+Write an updated memory summary that merges the existing memory with recent tool actions. Include:
+1. What was done — which files were read, edited, created
+2. Commands run and their purpose
+3. Patterns: what the agent has been working on
 4. Pending work or open questions
 
 Keep it under 800 words. Write in past tense. No preamble — start directly with the summary.`;
@@ -448,11 +445,11 @@ async function drain() {
       ? `${memory}${history}[Message from ${msg.fromAgent} in the team chat]\n${msg.text}`
       : `${memory}${history}${msg.fromUser}: ${msg.text}`;
 
-    const response = await callClaude(prompt, AGENT_DIR, msg.text);
+    const { response, tools } = await callClaude(prompt, AGENT_DIR, msg.text);
     clearInterval(typingInterval);
 
-    // Log exchange and compact memory if needed
-    appendToMemoryLog(msg.text, response);
+    // Log tool actions and compact memory if needed
+    appendToMemoryLog(tools);
     compactMemoryIfNeeded().catch(() => {});
 
     // If agent has nothing to say on a non-mandatory message, stay silent
@@ -653,12 +650,18 @@ function callClaudeRaw(
   });
 }
 
-function callClaude(message: string, cwd: string, rawMessage?: string): Promise<string> {
+interface ClaudeResult {
+  response: string;
+  tools: string[];
+}
+
+function callClaude(message: string, cwd: string, rawMessage?: string): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
     const disallowed = ["Bash(rm -rf *)", ...EXTRA_DISALLOWED];
 
     const args = [
       "-p",
+      "--verbose",
       "--model", AGENT_MODEL,
       "--output-format", "json",
       "--dangerously-skip-permissions",
@@ -667,7 +670,7 @@ function callClaude(message: string, cwd: string, rawMessage?: string): Promise<
       message,
     ];
 
-    console.log(`  → claude -p (cwd: ${path.basename(cwd)})`);
+    console.log(`  → claude -p --verbose (cwd: ${path.basename(cwd)})`);
 
     const proc = spawn(CLAUDE_PATH, args, {
       cwd,
@@ -684,14 +687,37 @@ function callClaude(message: string, cwd: string, rawMessage?: string): Promise<
     proc.on("close", (code) => {
       if (code === 0) {
         try {
-          const json = JSON.parse(stdout.trim());
-          const cost = json.total_cost_usd || 0;
-          const model = Object.keys(json.modelUsage || {})[0] || "unknown";
-          console.log(`  → Cost: $${cost.toFixed(4)} | ${model}`);
-          logCost(AGENT_NAME, "agent", cost, json.usage || {}, rawMessage || message, model);
-          resolve(json.result || "");
+          const msgs = JSON.parse(stdout.trim());
+
+          // Extract tool actions from the message array
+          const tools: string[] = [];
+          let response = "";
+          let cost = 0;
+          let model = "unknown";
+
+          for (const m of msgs) {
+            if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+              for (const c of m.message.content) {
+                if (c.type === "tool_use") {
+                  const input = c.input || {};
+                  // Compact representation: Tool(key_arg)
+                  const arg = input.file_path || input.command?.slice(0, 80) || input.pattern || input.query || "";
+                  tools.push(arg ? `${c.name}(${arg})` : c.name);
+                }
+              }
+            }
+            if (m.type === "result") {
+              response = m.result || "";
+              cost = m.total_cost_usd || 0;
+              model = Object.keys(m.modelUsage || {})[0] || "unknown";
+            }
+          }
+
+          console.log(`  → Cost: $${cost.toFixed(4)} | ${model} | ${tools.length} tool calls`);
+          logCost(AGENT_NAME, "agent", cost, msgs.find((m: any) => m.type === "result")?.usage || {}, rawMessage || message, model);
+          resolve({ response, tools });
         } catch {
-          resolve(stdout.trim());
+          resolve({ response: stdout.trim(), tools: [] });
         }
       } else {
         reject(new Error(stderr.trim() || `claude exited with code ${code}`));
