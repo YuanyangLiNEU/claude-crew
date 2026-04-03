@@ -105,9 +105,9 @@ cp .env.example .env
 ### 5. Start
 
 ```bash
-npm run start:all     # Start all agents in background
-npm run status        # Check who's running
-npm run stop          # Stop all agents
+npm run start:all     # Start coordinator (manages all agents)
+npm run status        # Check coordinator + bot status
+npm run stop          # Stop coordinator
 ```
 
 ### 6. Chat
@@ -116,30 +116,46 @@ In the Telegram group, @mention a bot directly, or just send a message — the s
 
 ## How It Works
 
+### Architecture
+
+One **coordinator** process manages all 4 Telegram bots, routing, and dispatch. Per-request **workers** handle Claude calls and memory.
+
+```
+Telegram message
+  → Coordinator (1 process, all bots)
+    → Routes to the right agent
+    → Spawns worker.ts
+      → Injects agent memory + group history
+      → Calls claude -p --verbose
+      → Returns { response, tools }
+    → Coordinator sends response to Telegram
+    → [Future: workflow gates here]
+```
+
 ### Tagged messages (direct)
 ```
 "@engineer_devin fix the login bug"
-  → Goes directly to Devin's process
-  → Prompt: [agent memory] + [group history] + message
-  → claude -p --model sonnet → responds
+  → Coordinator receives on Devin's bot
+  → Spawns worker with Devin's config + memory
+  → Worker calls Claude, returns response
+  → Coordinator sends to Telegram
 ```
 
 ### Non-tagged messages (smart routing)
 ```
 "the email layout looks weird"
-  → Router agent (first in agents.yaml) logs to group-history.jsonl
-  → After 1s debounce, router calls Claude Sonnet:
-    "Read this conversation. Who should respond?"
+  → Coordinator logs to group-history.jsonl
+  → After 1s debounce, calls Claude Sonnet: "Who should respond?"
   → Sonnet returns "ux_aria"
-  → Router writes to shared/inbox/router-to-ux_aria-*.json
-  → Aria's process picks it up (polls every 1s) → responds
+  → Coordinator dispatches directly to Aria's queue (no file polling)
+  → Spawns worker, sends response
 ```
 
 ### Bot-to-bot handoff
 ```
 Devin's response mentions @ux_aria
-  → Coordinator writes to shared/inbox/
-  → Aria picks it up and responds
+  → Coordinator pushes to Aria's queue directly (instant, no inbox files)
+  → Spawns worker for Aria, sends response
 ```
 
 ## Configuration
@@ -176,11 +192,13 @@ Each agent's directory has a `CLAUDE.md` that defines their role, responsibiliti
 claude-crew/
   agents.yaml              # Agent configuration
   .env                     # Bot tokens (not in git)
-  src/index.ts             # Coordinator (grammy + claude CLI)
+  src/
+    coordinator.ts         # One process: all Telegram bots, routing, dispatch
+    worker.ts              # Spawned per request: Claude call, memory, costs
   scripts/
-    restart-all.sh         # Start/restart all agents
-    stop-all.sh            # Stop all agents
-    status.sh              # Check agent status
+    restart-all.sh         # Start coordinator
+    stop-all.sh            # Stop coordinator
+    status.sh              # Check coordinator + bot status
     costs.sh               # CLI cost summary
     costs-server.ts        # Web cost dashboard
   agents/

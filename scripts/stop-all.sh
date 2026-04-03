@@ -1,12 +1,12 @@
 #!/bin/bash
-# Stop all Claude Crew agents (graceful shutdown)
+# Stop Claude Crew coordinator
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_DIR="$ROOT/.pids"
 
 if [ ! -d "$PID_DIR" ]; then
-  echo "No agents running."
+  echo "No coordinator running."
   exit 0
 fi
 
