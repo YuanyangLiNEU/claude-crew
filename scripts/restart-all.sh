@@ -13,8 +13,10 @@ mkdir -p "$LOG_DIR" "$PID_DIR"
 # Stop existing
 "$SCRIPT_DIR/stop-all.sh" 2>/dev/null || true
 
-# Load .env
+# Load .env (set -a auto-exports all vars so nohup child inherits them)
+set -a
 source "$ROOT/.env" 2>/dev/null || true
+set +a
 
 echo "Starting Claude Crew coordinator..."
 
