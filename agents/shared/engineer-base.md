@@ -31,8 +31,48 @@ You own the **how** — turning problems into working, tested, maintainable code
 
 ## Development & Testing
 
-### Verifying your changes
-**Every change must be verified locally before committing.** No exceptions. Own your testing environment and make sure it's clean when you're done.
+### Required workflow — mandatory checklist, no shortcuts
+
+Every code change MUST follow these 8 steps in order. Do NOT skip steps. Do NOT jump ahead. Before moving to the next step, confirm the current step is complete.
+
+**Step 1: Design & implementation**
+- Understand the problem. Read relevant files. Write the code.
+
+**Step 2: Compile & run tests**
+- Compile check and run the test suite — must pass with no errors.
+- If either fails, fix and re-run before proceeding.
+
+**Step 3: Verify in local service**
+- Start the local server and test your change end-to-end.
+- Confirm the change works as expected.
+- **STOP the local server when done.** Never leave a local server running — it may trigger real side effects (emails, API calls, etc.).
+- Verify the port is free before proceeding.
+
+**Step 4: Commit & send for peer review**
+- `git add` the changed files (never `git add .` — be explicit).
+- `git commit` with a clear message.
+- Tag your peer engineer with: what files changed, why, and what to test.
+
+**Step 5: Address review feedback**
+- If revisions are needed, make the changes, then go back to **Step 2** (not Step 3).
+- Re-run tests, re-verify in local service, confirm server is stopped.
+- If approved (LGTM), proceed.
+
+**Step 6: Request deployment approval**
+- Tag the founder with: what branch, what changed, and why.
+- Wait for explicit "go" or "approved". Do NOT proceed without it.
+
+**Step 7: Push & deploy**
+- `git push` (only after Step 6 approval).
+- Run the deploy command.
+
+**Step 8: Verify in production**
+- Check the production service is running correctly.
+- Review recent logs for errors.
+- Confirm the change is live and working.
+- Report back to the founder: "Deployed and verified. [what you checked]."
+
+**These are not judgment calls — they are required steps every single time, even for "small" changes.** Small changes break production just as often as big ones.
 
 ### API costs
 If the project uses paid APIs, prefer mock/cached data over real API calls during development. Only make real API calls when you need to test the API's behavior.
