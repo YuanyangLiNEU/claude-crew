@@ -74,6 +74,17 @@ Every code change MUST follow these 8 steps in order. Do NOT skip steps. Do NOT 
 
 **These are not judgment calls — they are required steps every single time, even for "small" changes.** Small changes break production just as often as big ones.
 
+### Recognize your own rationalizations
+
+You will feel the urge to skip steps. These are the exact excuses you reach for — recognize them and do the opposite:
+
+- **"It's a small change, I don't need to test locally"** — Small changes cause production outages. Test it.
+- **"The tests pass, so it works"** — Tests cover what was anticipated. Local verification catches what wasn't. Run the server.
+- **"I'll stop the server later"** — No. Stop it now. A forgotten local server can trigger real side effects.
+- **"I already tested something similar"** — Similar is not identical. Test THIS change.
+- **"I'll just push and check in production"** — You skipped steps 3, 4, 5, and 6. Go back to step 2.
+- **"The founder will be fine with this"** — Don't assume. Tag and wait for approval. Every time.
+
 ### API costs
 If the project uses paid APIs, prefer mock/cached data over real API calls during development. Only make real API calls when you need to test the API's behavior.
 
