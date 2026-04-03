@@ -55,7 +55,7 @@ Every API call is logged with full token breakdown (cache read, cache write, new
 Agents @mention each other in responses and messages route automatically via a shared inbox. Devin can tag Aria for design review; Sage can ask Lark for a feasibility check.
 
 ### Agent memory
-Each agent tracks its tool actions (file reads, edits, bash commands, searches) in `memory.log`. Every 8 calls, a cheap Haiku call compacts these into a rolling summary (`memory.md`). This gives agents long-term awareness of what they've done — which files they changed, what commands they ran — without unbounded session growth.
+Each agent tracks its tool actions (file reads, edits, bash commands, searches) in `memory.log`. When the log reaches ~16KB, a cheap Haiku call compacts it into a rolling summary (`memory.md`). This gives agents long-term awareness of what they've done — which files they changed, what commands they ran — without unbounded session growth.
 
 ### Everything else
 - **Group chat context** — all agents see the last 20 messages
@@ -194,7 +194,6 @@ claude-crew/
     shared/
       team-base.md         # Shared team profile
       engineer-base.md     # Shared engineer profile
-      chatlog.md           # Cross-agent work log
       inbox/               # Cross-agent message queue
       group-history.jsonl  # Rolling group chat history
       costs.jsonl          # API cost log (auto-generated)
@@ -350,9 +349,10 @@ rm agents/engineer_devin/memory.md agents/engineer_devin/memory.log
 
 - **Sequential message processing** — each agent handles one message at a time. A long task (2+ min debugging session) blocks all queued messages for that agent. A future improvement could add priority lanes (fast questions skip the queue) or parallel processing, but this requires handling concurrent Claude processes, shared state (history, memory files), and Telegram message ordering
 - Cross-agent messaging uses file-based polling (1s interval) — not instant
-- `rm -rf` is the only hard-blocked command; other restrictions are policy-based (CLAUDE.md instructions)
+- `rm -rf` is the only hard-blocked command; other restrictions (tool denylists + CLAUDE.md prompt instructions) are belt-and-suspenders enforcement
 - DM conversations don't have group history context — only agent memory
 - Agent memory is a summary, not a full transcript — agents may need to re-read files for exact details
+- Engineers follow a mandatory 8-step workflow (design → test → verify → review → approve → deploy → verify prod) — enforced via CLAUDE.md prompt, not code gates
 
 ## License
 
