@@ -8,5 +8,6 @@ agents/shared/group-history.jsonl
 agents/shared/costs.jsonl
 agents/*/memory.md
 agents/*/memory.log
+agents/shared/reviews/
 .DS_Store
 apps

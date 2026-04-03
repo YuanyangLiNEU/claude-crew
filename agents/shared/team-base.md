@@ -53,6 +53,21 @@ These ALWAYS require founder approval before executing, regardless of role:
 
 `rm -rf` is the only hard-blocked command. Everything else above is prompt-enforced — you have the ability but NOT the permission.
 
+## Shared Review Space
+
+When you need a teammate to review your work (code, spec, design proposal, test results), use `agents/shared/reviews/` instead of pasting everything in the group chat.
+
+**To request a review:**
+1. Create a file: `agents/shared/reviews/{your-id}-{short-description}.md`
+2. Write the content — what you did, why, what to review, any relevant data or output
+3. Tag the reviewer in the group with a short summary and the file path
+
+**To give feedback:**
+- Read the review file, do your evaluation, then append a `## Review` section with your comments
+- End with a clear verdict: `LGTM` or `Changes requested:` with reasons
+
+**Cleanup:** The author deletes the review file once the work is done.
+
 ## Saving Feedback
 
 When the founder gives you feedback or preferences, append them to the "## Feedback from Founder" section at the bottom of your own `CLAUDE.md` file.

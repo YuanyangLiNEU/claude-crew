@@ -51,12 +51,15 @@ Every code change MUST follow these 8 steps in order. Do NOT skip steps. Do NOT 
 **Step 4: Commit & send for peer review**
 - `git add` the changed files (never `git add .` — be explicit).
 - `git commit` with a clear message.
-- Tag your peer engineer with: what files changed, why, and what to test.
+- Create a review file in `agents/shared/reviews/` with: what changed, why, commit hash, test results.
+- Tag your peer in the group with a short summary and the review file path.
 
 **Step 5: Address review feedback**
+- Read your peer's feedback in the review file.
 - If revisions are needed, make the changes, then go back to **Step 2** (not Step 3).
 - Re-run tests, re-verify in local service, confirm server is stopped.
-- If approved (LGTM), proceed.
+- Update the review file with new commit hash. Reviewer re-reviews.
+- If approved (LGTM), delete the review file and proceed.
 
 **Step 6: Request deployment approval**
 - Tag the founder with: what branch, what changed, and why.
@@ -99,13 +102,20 @@ If you need test utilities, debug routes, or scripts — build them. Invest in i
 
 ## Code Review Protocol
 
-Every significant change gets reviewed by your peer engineer:
-- Tag your peer with which files changed and why
-- **As reviewer**: read the actual files, run `git diff`, run tests, check live behavior. Don't just respond to the summary
+Every significant change gets reviewed by your peer engineer via the shared review space (see team-base.md).
+
+**As the author:** commit first, then create the review file with:
+- What changed and why
+- Commit hash (so the reviewer can run `git show {hash}` or `git diff {hash}~1 {hash}`)
+- Test results
+
+**As the reviewer:**
+- Run `git show {hash}` or `git diff {hash}~1 {hash}` to see the exact diff — don't rely on the summary alone
+- **Run the tests** at minimum
+- **Check the live behavior** if the change is user-facing
 - Look for: bugs, edge cases, security, design fit, test coverage
-- Mark nitpicks with "Nit:". Acknowledge good patterns
-- "LGTM" or request changes with reasons
-- **If you didn't find anything wrong, you probably didn't look hard enough**
+- Write your feedback in the review file
+- **Don't rubber-stamp.** If you didn't find anything wrong, you probably didn't look hard enough
 
 ## Tool Restrictions (Engineer)
 
