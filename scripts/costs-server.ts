@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
 /**
- * Cost Dashboard — lightweight local web server for viewing agent costs.
+ * Agent Cost Dashboard — lightweight local web server for viewing agent costs.
  * Usage: npx tsx scripts/costs-server.ts [port]
- *   or:  npm run costs
+ *   or:  npm run costs:dashboard
  */
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import fs from "fs";
@@ -68,8 +68,22 @@ function formatInput(e: CostEntry): string {
   return parts.join('<span class="t-sep"> / </span>') || "0";
 }
 
-function buildPage(): string {
-  const entries = loadCosts();
+function getTodayPST(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+}
+
+function filterByDate(entries: CostEntry[], date: string): CostEntry[] {
+  if (!date) return entries;
+  return entries.filter(e => {
+    const entryDate = new Date(e.ts).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    return entryDate === date;
+  });
+}
+
+function buildPage(dateParam: string): string {
+  const selectedDate = dateParam || getTodayPST();
+  const allEntries = loadCosts();
+  const entries = filterByDate(allEntries, selectedDate);
 
   const byAgent: Record<string, CostEntry[]> = {};
   const routerEntries: CostEntry[] = [];
@@ -87,95 +101,130 @@ function buildPage(): string {
   const agentTotal = entries.filter((e) => e.type === "agent").reduce((s, e) => s + e.cost, 0);
   const routerTotal = routerEntries.reduce((s, e) => s + e.cost, 0);
 
+  const VISIBLE_ROWS = 10;
+  let sectionIdx = 0;
+
+  function buildRows(entries: CostEntry[], id: string): string {
+    const reversed = entries.slice().reverse();
+    const rows = reversed.map((m, i) => {
+      const time = new Date(m.ts).toLocaleString("en-US", {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+      const hidden = i >= VISIBLE_ROWS ? ` class="hidden-row" data-section="${id}" style="display:none"` : "";
+      return `<tr${hidden}>
+        <td class="time">${time}</td>
+        <td class="model">${shortModel(m.model)}</td>
+        <td class="msg">${escHtml(m.message)}</td>
+        <td class="tokens">${formatInput(m)}</td>
+        <td class="tokens">${(m.outputTokens || 0).toLocaleString()}</td>
+        <td class="cost">$${m.cost.toFixed(4)}</td>
+      </tr>`;
+    }).join("");
+    const moreBtn = reversed.length > VISIBLE_ROWS
+      ? `<tr class="more-row" data-section="${id}"><td colspan="6" class="more-cell"><a href="#" onclick="toggleSection('${id}');return false" id="btn-${id}">Show ${reversed.length - VISIBLE_ROWS} more</a></td></tr>`
+      : "";
+    return rows + moreBtn;
+  }
+
   const agentSections = Object.entries(byAgent)
     .sort((a, b) => b[1].reduce((s, e) => s + e.cost, 0) - a[1].reduce((s, e) => s + e.cost, 0))
     .map(([agent, msgs]) => {
       const total = msgs.reduce((s, e) => s + e.cost, 0);
-      const rows = msgs
-        .map((m) => {
-          const time = new Date(m.ts).toLocaleString("en-US", {
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-          });
-          return `<tr>
-            <td class="time">${time}</td>
-            <td class="model">${shortModel(m.model)}</td>
-            <td class="msg">${escHtml(m.message)}</td>
-            <td class="tokens">${formatInput(m)}</td>
-            <td class="tokens">${(m.outputTokens || 0).toLocaleString()}</td>
-            <td class="cost">$${m.cost.toFixed(4)}</td>
-          </tr>`;
-        })
-        .join("");
+      const id = `agent-${sectionIdx++}`;
       return `
         <div class="agent-section">
           <h3>${escHtml(agent)} <span class="agent-total">$${total.toFixed(4)} · ${msgs.length} calls</span></h3>
           <table>
             <thead><tr><th>Time</th><th>Model</th><th>Message</th><th>In tokens</th><th>Out tokens</th><th>Cost</th></tr></thead>
-            <tbody>${rows}</tbody>
+            <tbody>${buildRows(msgs, id)}</tbody>
           </table>
         </div>`;
     })
     .join("");
 
-  const routerRows = routerEntries
-    .map((r) => {
-      const time = new Date(r.ts).toLocaleString("en-US", {
-        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-      });
-      return `<tr>
-        <td class="time">${time}</td>
-        <td class="model">${shortModel(r.model)}</td>
-        <td class="msg">${escHtml(r.message)}</td>
-        <td class="tokens">${formatInput(r)}</td>
-        <td class="tokens">${(r.outputTokens || 0).toLocaleString()}</td>
-        <td class="cost">$${r.cost.toFixed(4)}</td>
-      </tr>`;
-    })
-    .join("");
+  const routerRows = buildRows(routerEntries, "router");
 
   return `<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Costs — Claude Crew</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f9fa; color: #1a1a1a; padding: 24px; max-width: 1200px; margin: 0 auto; }
-  h1 { font-size: 1.5rem; margin-bottom: 8px; }
-  .subtitle { color: #666; margin-bottom: 24px; font-size: 0.9rem; }
-  .summary { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-  .legend { color: #888; font-size: 0.78rem; margin-bottom: 32px; }
-  .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f9fa; color: #1a1a1a; padding: 32px; max-width: 1200px; margin: 0 auto; }
+
+  /* Header */
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .header-left h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .header-right input[type="date"] { font-size: 0.9rem; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
+  .header-right .refresh { color: #2563eb; text-decoration: none; font-size: 0.9rem; padding: 8px 14px; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
+  .header-right .refresh:hover { background: #f0f4ff; }
+  .header-meta { color: #888; font-size: 0.82rem; }
+
+  /* Summary cards */
+  .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
+  .summary-card { background: #fff; border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .summary-card .label { font-size: 0.7rem; color: #999; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; }
+  .summary-card .value { font-size: 1.6rem; font-weight: 700; margin-top: 6px; }
+  .summary-card .value.green { color: #16a34a; }
+  .summary-card .value.blue { color: #2563eb; }
+  .summary-card .value.orange { color: #ea580c; }
+
+  /* Legend */
+  .legend { color: #999; font-size: 0.75rem; margin-bottom: 28px; }
+  .legend .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
   .legend .dot-read { background: #16a34a; }
   .legend .dot-write { background: #ea580c; }
   .legend .dot-new { background: #2563eb; }
+
+  /* Token colors */
   .t-read { color: #16a34a; font-weight: 600; }
   .t-write { color: #ea580c; font-weight: 600; }
   .t-new { color: #2563eb; font-weight: 600; }
   .t-sep { color: #ccc; }
-  .summary-card { background: #fff; border-radius: 12px; padding: 16px 20px; flex: 1; min-width: 140px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-  .summary-card .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-  .summary-card .value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
-  .summary-card .value.green { color: #16a34a; }
-  .summary-card .value.blue { color: #2563eb; }
-  .summary-card .value.orange { color: #ea580c; }
-  .agent-section { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-  .agent-section h3 { font-size: 1rem; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
-  .agent-total { font-weight: 400; color: #888; font-size: 0.85rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th { text-align: left; color: #888; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #eee; }
-  td { padding: 6px 8px; border-bottom: 1px solid #f3f3f3; }
-  .time { white-space: nowrap; color: #888; width: 120px; }
+
+  /* Agent sections */
+  .agent-section { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .agent-section h3 { font-size: 0.95rem; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
+  .agent-total { font-weight: 400; color: #999; font-size: 0.82rem; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th { text-align: left; color: #999; font-weight: 500; padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.3px; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f5f5f5; }
+  tr:hover td { background: #fafbfc; }
+  .time { white-space: nowrap; color: #999; width: 130px; }
   .msg { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .model { color: #888; width: 60px; font-size: 0.8rem; }
+  .model { color: #999; width: 60px; font-size: 0.78rem; }
   .tokens { text-align: right; color: #666; width: 160px; white-space: nowrap; }
   .cost { text-align: right; font-weight: 600; width: 80px; }
-  .refresh { float: right; color: #2563eb; text-decoration: none; font-size: 0.85rem; }
+
   .empty { text-align: center; color: #888; padding: 64px 24px; }
-  @media (max-width: 600px) { body { padding: 12px; } .summary { flex-direction: column; } }
+  .more-cell { text-align: center; padding: 10px; }
+  .more-cell a { color: #2563eb; text-decoration: none; font-size: 0.82rem; font-weight: 500; }
+  .more-cell a:hover { text-decoration: underline; }
+  @media (max-width: 700px) { body { padding: 14px; } .summary { grid-template-columns: repeat(2, 1fr); } .header { flex-direction: column; align-items: flex-start; gap: 12px; } }
 </style>
+<script>
+function toggleSection(id) {
+  const rows = document.querySelectorAll('tr[data-section="' + id + '"].hidden-row');
+  const btn = document.getElementById('btn-' + id);
+  const moreRow = document.querySelector('tr.more-row[data-section="' + id + '"]');
+  const visible = rows[0] && rows[0].style.display !== 'none';
+  rows.forEach(function(r) { r.style.display = visible ? 'none' : ''; });
+  if (btn) btn.textContent = visible ? 'Show ' + rows.length + ' more' : 'Show less';
+}
+</script>
 </head><body>
-<a class="refresh" href="/">&#8634; Refresh</a>
-<h1>Agent Costs</h1>
-<p class="subtitle">${entries.length} calls tracked${entries.length ? ` · since ${new Date(entries[0].ts).toLocaleDateString()}` : ""}</p>
+<div class="header">
+  <div class="header-left">
+    <h1>Agent Costs</h1>
+    <span class="header-meta">${entries.length} calls on ${selectedDate}${allEntries.length !== entries.length ? ` &middot; ${allEntries.length} all time` : ""}</span>
+  </div>
+  <div class="header-right">
+    <input type="date" id="datePicker" value="${selectedDate}" onchange="window.location='/?date='+this.value">
+    <a class="refresh" href="/?date=${selectedDate}">Refresh</a>
+  </div>
+</div>
 
 ${entries.length === 0 ? '<div class="empty"><p>No cost data yet.</p><p style="margin-top:8px;font-size:0.85rem">Cost tracking starts automatically when agents process messages.</p></div>' : `
 <div class="summary">
@@ -205,12 +254,14 @@ ${routerEntries.length ? `
 </body></html>`;
 }
 
-function handleRequest(_req: IncomingMessage, res: ServerResponse) {
+function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const dateParam = url.searchParams.get("date") || "";
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(buildPage());
+  res.end(buildPage(dateParam));
 }
 
 const server = createServer(handleRequest);
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Cost dashboard: http://localhost:${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Agent cost dashboard: http://localhost:${PORT}`);
 });
