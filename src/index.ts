@@ -701,6 +701,7 @@ function callClaude(message: string, cwd: string, rawMessage?: string): Promise<
       "--model", AGENT_MODEL,
       "--output-format", "json",
       "--dangerously-skip-permissions",
+      "--strict-mcp-config",
       ...(disallowed.length ? ["--disallowedTools", ...disallowed] : []),
       "--",
       message,
